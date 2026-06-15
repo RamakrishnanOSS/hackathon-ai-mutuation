@@ -30,7 +30,7 @@ def main():
 
     # 2. Spin up FastAPI Backend Service in background
     print("\n🚀 Step 2: Spinning up FastAPI Core Mutation Service in background...")
-    service_path = os.path.join("agent", "services", "core_mutation_service.py")
+    service_path = os.path.join("services", "core_mutation_service.py")
     
     # We run the FastAPI service locally on port 8000
     p = subprocess.Popen(

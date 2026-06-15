@@ -8,7 +8,7 @@ set -euo pipefail
 
 LOGFILE="/tmp/core-mutation-service.log"
 PIDFILE="/tmp/core-mutation-service.pid"
-SERVICE_SCRIPT="/workspace/agent/services/core_mutation_service.py"
+SERVICE_SCRIPT="/workspace/services/core_mutation_service.py"
 
 # ── Already running? ─────────────────────────────────────────────────────────
 if [[ -f "${PIDFILE}" ]]; then
