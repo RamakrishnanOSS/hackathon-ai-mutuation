@@ -28,6 +28,9 @@ services:
       context: .
       dockerfile: Dockerfile.core
     container_name: core-service
+    volumes:
+      - ./agent:/workspace:cached
+      - ./services:/workspace/services:cached
     networks:
       - mutation-net
     ports:

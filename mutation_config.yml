@@ -35,6 +35,6 @@ ai_engine_c:
   openai_api_key_env: "OPENAI_API_KEY"
 
 workspace:
-  default_source_file: "agent/hello.py"
-  default_test_file: "agent/test_hello.py"
+  default_source_file: "hello.py"
+  default_test_file: "test_hello.py"
   test_runner: "pytest"

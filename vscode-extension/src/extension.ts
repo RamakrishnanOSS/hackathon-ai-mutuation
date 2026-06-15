@@ -17,8 +17,8 @@ function loadYamlConfig(wsDir: string): any {
   const defaultConfig = {
     coreUrl: 'http://core-service:8000',
     grafanaUrl: 'http://grafana:3000',
-    defaultSourceFile: 'agent/hello.py',
-    defaultTestFile: 'agent/test_hello.py',
+    defaultSourceFile: 'hello.py',
+    defaultTestFile: 'test_hello.py',
     testRunner: 'pytest'
   };
 

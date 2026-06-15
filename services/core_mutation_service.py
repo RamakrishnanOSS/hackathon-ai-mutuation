@@ -221,10 +221,10 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
     overall_status = "TESTS_PASSED"
 
     def _find_c_source_files(workspace_dir: str):
-        """Return all non-test C/C++ source files under agent/ and workspace root."""
+        """Return all non-test C/C++ source files under the workspace root."""
         C_EXTS = ('.c', '.cpp', '.cc', '.cxx')
         found = []
-        for search_dir in [os.path.join(workspace_dir, "agent"), workspace_dir]:
+        for search_dir in [workspace_dir]:
             if not os.path.isdir(search_dir):
                 continue
             for fname in os.listdir(search_dir):
@@ -263,7 +263,7 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
                 tests_merged.extend(res_lang.get("tests", []))
         else:
             # Python: pytest auto-discovers all test_*.py — one run covers everything
-            primary_file = os.path.join(payload.workspaceDir, "agent", "hello.py")
+            primary_file = os.path.join(payload.workspaceDir, "hello.py")
             temp_sandbox = os.path.join(tempfile_dir_root(), f"baseline-python-{uuid.uuid4().hex[:8]}")
             res_lang = runner.execute_suite(
                 workspace_root=payload.workspaceDir,
@@ -539,15 +539,15 @@ def execute_tests_generation(projectId: str, payload: TestGenerateRequest):
         if not mutant:
             continue
 
-        tgt_rel = payload.targetFiles[0] if payload.targetFiles else "agent/hello.py"
+        tgt_rel = payload.targetFiles[0] if payload.targetFiles else "hello.py"
         full_tgt = os.path.join(payload.workspaceDir, tgt_rel)
         if not os.path.exists(full_tgt):
             if is_cpp_source(tgt_rel):
-                full_tgt = os.path.join(payload.workspaceDir, "agent", "hello.cpp")
+                full_tgt = os.path.join(payload.workspaceDir, "hello.cpp")
                 if not os.path.exists(full_tgt):
-                    full_tgt = os.path.join(payload.workspaceDir, "agent", "hello.c")
+                    full_tgt = os.path.join(payload.workspaceDir, "hello.c")
             else:
-                full_tgt = os.path.join(payload.workspaceDir, "agent", "hello.py")
+                full_tgt = os.path.join(payload.workspaceDir, "hello.py")
         
         with open(full_tgt, "r", encoding="utf-8") as f:
             tgt_src = f.read()
@@ -555,11 +555,11 @@ def execute_tests_generation(projectId: str, payload: TestGenerateRequest):
         # Load standard existing tests to provide styling structure
         full_test = os.path.join(payload.workspaceDir, payload.testFile)
         if not os.path.exists(full_test):
-            fallback_test = "agent/test_hello.py"
+            fallback_test = "test_hello.py"
             if is_cpp_source(payload.testFile):
-                fallback_test = "agent/test_hello.c"
+                fallback_test = "test_hello.c"
                 if not os.path.exists(os.path.join(payload.workspaceDir, fallback_test)):
-                    fallback_test = "agent/test_hello.cpp"
+                    fallback_test = "test_hello.cpp"
             full_test = os.path.join(payload.workspaceDir, fallback_test)
 
         existing_t = ""
@@ -719,8 +719,8 @@ def load_config() -> dict:
             "openai_api_key_env": "OPENAI_API_KEY"
         },
         "workspace": {
-            "default_source_file": "agent/hello.py",
-            "default_test_file": "agent/test_hello.py",
+            "default_source_file": "hello.py",
+            "default_test_file": "test_hello.py",
             "test_runner": "pytest"
         }
     }
