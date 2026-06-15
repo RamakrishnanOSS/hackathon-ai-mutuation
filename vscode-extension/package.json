@@ -11,12 +11,6 @@
     "Testing"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [
-    "onView:mutation-explorer",
-    "onCommand:mutation.runBaseline",
-    "onCommand:mutation.generate",
-    "onCommand:mutation.executeRuns"
-  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -109,6 +103,16 @@
       ],
       "editor/title": [
         {
+          "command": "mutation.analyzeCurrentEditor",
+          "when": "editorTextFocus",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mutation.suggestFixesCurrentEditor",
+          "when": "editorTextFocus",
+          "group": "navigation@2"
+        },
+        {
           "command": "mutation.acceptActiveDiff",
           "when": "isInDiffEditor",
           "group": "navigation@1"
@@ -167,6 +171,24 @@
         "command": "mutation.generate",
         "title": "Scan & Generate Mutants",
         "icon": "$(sparkle)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.analyzeCurrentEditor",
+        "title": "Analyze Current File",
+        "icon": "$(inspect)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.suggestFixesCurrentEditor",
+        "title": "Suggest Fixes for Current File",
+        "icon": "$(light-bulb)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.suggestFixForMutant",
+        "title": "Generate Mutation Fix Suggestions",
+        "icon": "$(light-bulb)",
         "category": "Mutation Testing"
       },
       {

@@ -12,6 +12,173 @@ let activeDiffMutant: any = null;
 let lastBaselineResult: { tests: any[]; durationMs?: number } = { tests: [] };
 let lastRunResults: any[] = [];
 let lastSelectedSourceFiles: string[] = [];
+let mutationDiagnostics: vscode.DiagnosticCollection;
+
+const mutationDecorationTypes = {
+  high: vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: 'rgba(244, 67, 54, 0.14)',
+    overviewRulerColor: '#f44336',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    border: '1px solid rgba(244, 67, 54, 0.35)'
+  }),
+  medium: vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: 'rgba(255, 183, 77, 0.14)',
+    overviewRulerColor: '#ffb74d',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    border: '1px solid rgba(255, 183, 77, 0.35)'
+  }),
+  low: vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: 'rgba(76, 175, 80, 0.12)',
+    overviewRulerColor: '#4caf50',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    border: '1px solid rgba(76, 175, 80, 0.32)'
+  }),
+  info: vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: 'rgba(120, 144, 156, 0.10)',
+    overviewRulerColor: '#78909c',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    border: '1px solid rgba(120, 144, 156, 0.28)'
+  })
+};
+
+function normalizeWorkspacePath(workspaceRoot: string, filePath: string): string {
+  const normalized = (filePath || '').replace(/\\/g, '/');
+  if (!workspaceRoot) {
+    return normalized.replace(/^\.\//, '');
+  }
+  if (path.isAbsolute(normalized)) {
+    const relative = path.relative(workspaceRoot, normalized).replace(/\\/g, '/');
+    return relative.replace(/^\.\//, '');
+  }
+  return normalized.replace(/^\.\//, '');
+}
+
+function currentEditorMutants(editor: vscode.TextEditor): any[] {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) {
+    return [];
+  }
+
+  const relativeDocPath = normalizeWorkspacePath(workspaceRoot, editor.document.uri.fsPath);
+  return activeMutantsList.filter(mutant => {
+    const candidatePath = normalizeWorkspacePath(workspaceRoot, mutant.file_path || mutant.filePath || '');
+    return candidatePath === relativeDocPath || candidatePath.endsWith(`/${relativeDocPath}`) || path.basename(candidatePath) === path.basename(relativeDocPath);
+  });
+}
+
+function mutationSeverity(mutant: any): 'high' | 'medium' | 'low' | 'info' {
+  const status = (mutant?.status || '').toString().toUpperCase();
+  if (status === 'SURVIVED' || status === 'FAILED') {
+    return 'high';
+  }
+  if (status === 'KILLED' || status === 'PASSED') {
+    return 'low';
+  }
+  if (status === 'REJECTED') {
+    return 'info';
+  }
+  return 'medium';
+}
+
+function diagnosticSeverityForMutant(mutant: any): vscode.DiagnosticSeverity {
+  const status = (mutant?.status || '').toString().toUpperCase();
+  if (status === 'SURVIVED' || status === 'FAILED') {
+    return vscode.DiagnosticSeverity.Error;
+  }
+  if (status === 'KILLED' || status === 'PASSED') {
+    return vscode.DiagnosticSeverity.Information;
+  }
+  if (status === 'REJECTED') {
+    return vscode.DiagnosticSeverity.Hint;
+  }
+  return vscode.DiagnosticSeverity.Warning;
+}
+
+function refreshMutationAnnotations(): void {
+  const visibleEditors = vscode.window.visibleTextEditors;
+  const annotatedUris = new Set<string>();
+
+  mutationDiagnostics.clear();
+  for (const editor of visibleEditors) {
+    const editorMutants = currentEditorMutants(editor);
+    if (editorMutants.length > 0) {
+      applyMutationAnnotationsToEditor(editor, editorMutants);
+      annotatedUris.add(editor.document.uri.toString());
+    }
+  }
+
+  // Clear any decorations on visible editors that no longer have mutation data.
+  for (const editor of visibleEditors) {
+    if (!annotatedUris.has(editor.document.uri.toString())) {
+      editor.setDecorations(mutationDecorationTypes.high, []);
+      editor.setDecorations(mutationDecorationTypes.medium, []);
+      editor.setDecorations(mutationDecorationTypes.low, []);
+      editor.setDecorations(mutationDecorationTypes.info, []);
+    }
+  }
+}
+
+function applyMutationAnnotationsToEditor(editor: vscode.TextEditor, mutants: any[]): void {
+  const diagnostics: vscode.Diagnostic[] = [];
+  const lineGroups = new Map<number, any[]>();
+
+  for (const mutant of mutants) {
+    const lineNumber = Number(mutant?.line_number);
+    if (!Number.isInteger(lineNumber) || lineNumber <= 0 || lineNumber > editor.document.lineCount) {
+      continue;
+    }
+    const existing = lineGroups.get(lineNumber) || [];
+    existing.push(mutant);
+    lineGroups.set(lineNumber, existing);
+  }
+
+  const decorationRanges: Record<'high' | 'medium' | 'low' | 'info', vscode.Range[]> = {
+    high: [],
+    medium: [],
+    low: [],
+    info: []
+  };
+
+  for (const [lineNumber, groupedMutants] of lineGroups.entries()) {
+    const lineIndex = lineNumber - 1;
+    const lineRange = editor.document.lineAt(lineIndex).range;
+    const primaryMutant = groupedMutants[0];
+    const statusSummary = groupedMutants.map(mutant => {
+      const operator = mutant.operator_type || 'mutation';
+      const original = mutant.original_code || '?';
+      const mutated = mutant.mutated_value || '?';
+      return `${operator}: '${original}' → '${mutated}'`;
+    }).join(' | ');
+
+    const diagnosis = new vscode.Diagnostic(
+      lineRange,
+      `Mutation candidate(s) on this line: ${statusSummary}`,
+      diagnosticSeverityForMutant(primaryMutant)
+    );
+    diagnosis.source = 'mutation';
+    diagnosis.code = primaryMutant?.mutant_id || primaryMutant?.mutantId || `line-${lineNumber}`;
+    diagnostics.push(diagnosis);
+
+    const decorationBucket = mutationSeverity(primaryMutant);
+    decorationRanges[decorationBucket].push(lineRange);
+  }
+
+  mutationDiagnostics.set(editor.document.uri, diagnostics);
+  editor.setDecorations(mutationDecorationTypes.high, decorationRanges.high);
+  editor.setDecorations(mutationDecorationTypes.medium, decorationRanges.medium);
+  editor.setDecorations(mutationDecorationTypes.low, decorationRanges.low);
+  editor.setDecorations(mutationDecorationTypes.info, decorationRanges.info);
+}
+
+function upsertMutants(newMutants: any[]): void {
+  const newIds = new Set(newMutants.map(mutant => mutant.mutant_id || mutant.mutantId).filter(Boolean));
+  activeMutantsList = activeMutantsList.filter(mutant => !newIds.has(mutant.mutant_id || mutant.mutantId));
+  activeMutantsList = [...activeMutantsList, ...newMutants];
+}
 
 function loadYamlConfig(wsDir: string): any {
   const defaultConfig = {
@@ -67,6 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.text = "🧬 Mutation: Ready";
   statusBarItem.show();
+  mutationDiagnostics = vscode.languages.createDiagnosticCollection('mutation-testing');
 
   treeDataProvider = new MutationTreeDataProvider();
   vscode.window.registerTreeDataProvider('mutation-explorer', treeDataProvider);
@@ -270,12 +438,14 @@ export function activate(context: vscode.ExtensionContext) {
       // Defensive handling to ensure resp.mutants is populated and avoids "properties of undefined (reading 'map')" crashes
       const mutantsFound = resp && resp.mutants ? resp.mutants : [];
 
-      activeMutantsList = mutantsFound.map((m: any) => ({ ...m, status: 'PENDING', accepted: true }));
+      const normalizedMutants = mutantsFound.map((m: any) => ({ ...m, status: 'PENDING', accepted: true }));
+      upsertMutants(normalizedMutants);
       lastSelectedSourceFiles = [...targetFiles];
       
       // Update sectioned tree metadata
       treeDataProvider.refresh({ mutants: activeMutantsList });
       statusBarItem.text = `🧬 Generated ${activeMutantsList.length} Mutants`;
+      refreshMutationAnnotations();
       
       outputChannel.appendLine(`✅ AST Scan completed successfully!`);
       outputChannel.appendLine(`   • Total Candidates Parsed: ${activeMutantsList.length}`);
@@ -358,6 +528,7 @@ export function activate(context: vscode.ExtensionContext) {
 
           // Sync execution run metrics and push to UI tree
           treeDataProvider.refresh({ runs: workersResults });
+          refreshMutationAnnotations();
           
           const killedCount = activeMutantsList.filter(m => m.status === 'KILLED').length;
           const survivedCount = activeMutantsList.filter(m => m.status === 'SURVIVED').length;
@@ -502,6 +673,106 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   // ══════════════════════════════════════════════════════════════
+  // Command 4b: Analyze Current Editor File In-Place
+  // ══════════════════════════════════════════════════════════════
+  let analyzeCurrentEditor = vscode.commands.registerCommand('mutation.analyzeCurrentEditor', async () => {
+    const editor = vscode.window.activeTextEditor;
+    const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (!wsDir) {
+      vscode.window.showErrorMessage('Open a workspace folder to analyze the current file.');
+      return;
+    }
+    if (!editor || editor.document.isUntitled || editor.document.uri.scheme !== 'file') {
+      vscode.window.showWarningMessage('Open a saved file in the editor to run mutation analysis.');
+      return;
+    }
+
+    const relativePath = path.relative(wsDir, editor.document.uri.fsPath).replace(/\\/g, '/');
+    if (!relativePath || relativePath.startsWith('..')) {
+      vscode.window.showWarningMessage('The active file is not inside the current workspace folder.');
+      return;
+    }
+
+    const activeYaml = loadYamlConfig(wsDir);
+    const config = vscode.workspace.getConfiguration('mutationTesting');
+    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+    const aiProvider = config.get<string>('aiProvider', 'mock');
+    const selectedOperators = [
+      'relational_operator_replacement',
+      'arithmetic_substitution',
+      'boundary_value_tweak',
+      'boolean_inversion',
+      'return_value_stripping'
+    ];
+
+    statusBarItem.text = '🧬 Analyzing active file...';
+    outputChannel.show(true);
+    outputChannel.appendLine('=================================================');
+    outputChannel.appendLine(`🔎 Analyzing active editor file: ${relativePath}`);
+    outputChannel.appendLine('=================================================');
+
+    try {
+      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, {
+        workspaceDir: wsDir,
+        targetFiles: [relativePath],
+        operators: selectedOperators,
+        aiEngineProvider: aiProvider
+      });
+
+      const mutantsFound = resp && resp.mutants ? resp.mutants : [];
+      const normalizedMutants = mutantsFound.map((m: any) => ({ ...m, status: 'PENDING', accepted: true }));
+      upsertMutants(normalizedMutants);
+      treeDataProvider.refresh({ mutants: activeMutantsList });
+      refreshMutationAnnotations();
+
+      outputChannel.appendLine(`✅ In-editor mutation analysis completed: ${normalizedMutants.length} candidate(s) found.`);
+      vscode.window.showInformationMessage(`Mutation analysis completed for ${path.basename(relativePath)}: ${normalizedMutants.length} candidate(s) highlighted.`);
+    } catch (err: any) {
+      outputChannel.appendLine(`❌ Active file analysis failed: ${err.message}`);
+      vscode.window.showErrorMessage(`Mutation analysis failed: ${err.message}`);
+    }
+  });
+
+  let suggestFixesCurrentEditor = vscode.commands.registerCommand('mutation.suggestFixesCurrentEditor', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showWarningMessage('Open a file in the editor to generate mutation fix suggestions.');
+      return;
+    }
+
+    const editorMutants = currentEditorMutants(editor);
+    if (editorMutants.length === 0) {
+      vscode.window.showInformationMessage('No mutation candidates are highlighted for the current file. Run mutation analysis first.');
+      return;
+    }
+
+    if (editorMutants.length === 1) {
+      const mutantId = editorMutants[0].mutant_id || editorMutants[0].mutantId;
+      await vscode.commands.executeCommand('mutation.suggestFixForMutant', mutantId, editor.document.uri.toString());
+      return;
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      editorMutants.map(mutant => ({
+        label: `Line ${mutant.line_number}: ${mutant.operator_type}`,
+        description: `${mutant.original_code} → ${mutant.mutated_value}`,
+        mutantId: mutant.mutant_id || mutant.mutantId
+      })),
+      {
+        canPickMany: false,
+        title: 'Select a mutation candidate to generate fix suggestions'
+      }
+    );
+
+    if (!picked) {
+      return;
+    }
+
+    await vscode.commands.executeCommand('mutation.suggestFixForMutant', picked.mutantId, editor.document.uri.toString());
+  });
+
+  // ══════════════════════════════════════════════════════════════
   // Command: Accept Mutation
   // ══════════════════════════════════════════════════════════════
   let acceptMutationCmd = vscode.commands.registerCommand('mutation.accept', async (item: any) => {
@@ -525,6 +796,7 @@ export function activate(context: vscode.ExtensionContext) {
         mutant.accepted = true;
       }
       treeDataProvider.refresh({ mutants: activeMutantsList });
+      refreshMutationAnnotations();
       vscode.window.showInformationMessage(`Mutant ${mutantId} accepted and included for run execution.`);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to accept mutant: ${err.message}`);
@@ -555,6 +827,7 @@ export function activate(context: vscode.ExtensionContext) {
         mutant.accepted = false;
       }
       treeDataProvider.refresh({ mutants: activeMutantsList });
+      refreshMutationAnnotations();
       vscode.window.showInformationMessage(`Mutant ${mutantId} rejected and excluded from run execution.`);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to reject mutant: ${err.message}`);
@@ -576,6 +849,13 @@ export function activate(context: vscode.ExtensionContext) {
       lastBaselineResult = { tests: [] };
       lastSelectedSourceFiles = [];
       treeDataProvider.refresh({ baseline: [], mutants: [], runs: [] });
+      mutationDiagnostics.clear();
+      for (const editor of vscode.window.visibleTextEditors) {
+        editor.setDecorations(mutationDecorationTypes.high, []);
+        editor.setDecorations(mutationDecorationTypes.medium, []);
+        editor.setDecorations(mutationDecorationTypes.low, []);
+        editor.setDecorations(mutationDecorationTypes.info, []);
+      }
       statusBarItem.text = "🧬 Mutation testing system reset";
       outputChannel.appendLine("=================================================");
       outputChannel.appendLine("♻️ Mutation database and session cleaned successfully.");
@@ -588,6 +868,13 @@ export function activate(context: vscode.ExtensionContext) {
       lastBaselineResult = { tests: [] };
       lastSelectedSourceFiles = [];
       treeDataProvider.refresh({ baseline: [], mutants: [], runs: [] });
+      mutationDiagnostics.clear();
+      for (const editor of vscode.window.visibleTextEditors) {
+        editor.setDecorations(mutationDecorationTypes.high, []);
+        editor.setDecorations(mutationDecorationTypes.medium, []);
+        editor.setDecorations(mutationDecorationTypes.low, []);
+        editor.setDecorations(mutationDecorationTypes.info, []);
+      }
       statusBarItem.text = "🧬 Local mutation testing system reset";
       outputChannel.appendLine(`⚠️ Local session reset (remote reset failed: ${err.message})`);
       vscode.window.showWarningMessage(`Local session cleared. Remote reset failed: ${err.message}`);
@@ -651,6 +938,65 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showInformationMessage(`Successfully generated and appended ${proposed.test_fn_name} to ${path.basename(resolvedTestFile)} to kill survivor! Run execute tests verification.`);
     } catch (err: any) {
       vscode.window.showErrorMessage(`AI Test Generation failed: ${err.message}`);
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // Command 5b: Generate Fix Suggestions for a Mutation
+  // ══════════════════════════════════════════════════════════════
+  let suggestFixForMutant = vscode.commands.registerCommand('mutation.suggestFixForMutant', async (mutantId: string, documentUri?: string) => {
+    const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!wsDir) {
+      vscode.window.showErrorMessage('Open a workspace folder to generate mutation fix suggestions.');
+      return;
+    }
+
+    const mutant = activeMutantsList.find(m => m.mutant_id === mutantId || m.mutantId === mutantId);
+    if (!mutant) {
+      vscode.window.showWarningMessage('No cached mutant found for the selected suggestion. Run mutation analysis first.');
+      return;
+    }
+
+    const activeYaml = loadYamlConfig(wsDir);
+    const config = vscode.workspace.getConfiguration('mutationTesting');
+    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+    const aiProvider = config.get<string>('aiProvider', 'mock');
+    const sourcePath = normalizeWorkspacePath(wsDir, mutant.file_path || mutant.filePath || '');
+    const sourceExt = path.extname(sourcePath).toLowerCase();
+    const testFile = sourceExt === '.py' ? 'test_hello.py' : sourceExt === '.c' ? 'test_hello.c' : 'test_hello.cpp';
+    const fallbackDocumentPath = documentUri ? vscode.Uri.parse(documentUri).fsPath : '';
+
+    statusBarItem.text = '🧬 Generating fix suggestions...';
+    outputChannel.show(true);
+    outputChannel.appendLine('=================================================');
+    outputChannel.appendLine(`🛠️ Generating fix suggestions for mutant ${mutantId}`);
+    outputChannel.appendLine('=================================================');
+
+    try {
+      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/tests/generate`, {
+        workspaceDir: wsDir,
+        survivingMutantIds: [mutantId],
+        targetFiles: [sourcePath || normalizeWorkspacePath(wsDir, fallbackDocumentPath)],
+        testFile,
+        aiEngineProvider: aiProvider
+      });
+
+      const proposed = resp?.proposedTests?.[0];
+      if (!proposed) {
+        vscode.window.showInformationMessage('No fix suggestion could be generated for this mutation.');
+        return;
+      }
+
+      const suggestionLanguage = testFile.endsWith('.py') ? 'python' : 'cpp';
+      const suggestionText = proposed.lines.join('\n');
+      const doc = await vscode.workspace.openTextDocument({ language: suggestionLanguage, content: suggestionText });
+      await vscode.window.showTextDocument(doc, { preview: true });
+
+      outputChannel.appendLine(`✅ Generated fix suggestion test: ${proposed.test_fn_name || 'unnamed_test'}`);
+      vscode.window.showInformationMessage(`Fix suggestion generated for ${path.basename(sourcePath || 'current file')}.`);
+    } catch (err: any) {
+      outputChannel.appendLine(`❌ Fix suggestion generation failed: ${err.message}`);
+      vscode.window.showErrorMessage(`Fix suggestion generation failed: ${err.message}`);
     }
   });
 
@@ -977,7 +1323,65 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.text = '🧬 Mutation: Report Generated';
   });
 
-  context.subscriptions.push(runBaseline, generate, executeRuns, showDiff, proposeKillTest, openDashboard, acceptMutationCmd, rejectMutationCmd, acceptActiveDiff, rejectActiveDiff, clearDataCmd, exportBaselineHtml, generateReport, statusBarItem);
+  const mutationCodeActionProvider = vscode.languages.registerCodeActionsProvider(
+    { scheme: 'file' },
+    {
+      provideCodeActions(document, _range, context) {
+        const actions: vscode.CodeAction[] = [];
+        for (const diagnostic of context.diagnostics) {
+          if (diagnostic.source !== 'mutation') {
+            continue;
+          }
+          const mutantId = typeof diagnostic.code === 'string' ? diagnostic.code : undefined;
+          if (!mutantId) {
+            continue;
+          }
+          const action = new vscode.CodeAction('Generate mutation fix suggestions', vscode.CodeActionKind.QuickFix);
+          action.command = {
+            title: 'Generate mutation fix suggestions',
+            command: 'mutation.suggestFixForMutant',
+            arguments: [mutantId, document.uri.toString()]
+          };
+          action.diagnostics = [diagnostic];
+          action.isPreferred = true;
+          actions.push(action);
+        }
+        return actions;
+      }
+    },
+    { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+  );
+
+  const activeEditorRefresh = vscode.window.onDidChangeActiveTextEditor(() => {
+    refreshMutationAnnotations();
+  });
+
+  context.subscriptions.push(
+    runBaseline,
+    generate,
+    executeRuns,
+    showDiff,
+    analyzeCurrentEditor,
+    proposeKillTest,
+    suggestFixForMutant,
+    suggestFixesCurrentEditor,
+    openDashboard,
+    acceptMutationCmd,
+    rejectMutationCmd,
+    acceptActiveDiff,
+    rejectActiveDiff,
+    clearDataCmd,
+    exportBaselineHtml,
+    generateReport,
+    mutationCodeActionProvider,
+    activeEditorRefresh,
+    mutationDiagnostics,
+    mutationDecorationTypes.high,
+    mutationDecorationTypes.medium,
+    mutationDecorationTypes.low,
+    mutationDecorationTypes.info,
+    statusBarItem
+  );
 }
 
 export function deactivate() {}
