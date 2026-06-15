@@ -224,7 +224,7 @@ async function runMutationAnalysisForEditor(editor: vscode.TextEditor, options: 
 
   const activeYaml = loadYamlConfig(wsDir);
   const config = vscode.workspace.getConfiguration('mutationTesting');
-  const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+  const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://core-service:8000');
   const aiProvider = config.get<string>('aiProvider', 'mock');
   const selectedOperators = [
     'relational_operator_replacement',
@@ -271,10 +271,12 @@ async function runMutationAnalysisForEditor(editor: vscode.TextEditor, options: 
 function loadYamlConfig(wsDir: string): any {
   const defaultConfig = {
     coreUrl: 'http://core-service:8000',
-    grafanaUrl: 'http://grafana:3000',
+    grafanaUrl: 'http://localhost:3000',
+    prometheusUrl: 'http://localhost:9090',
     defaultSourceFile: 'hello.py',
     defaultTestFile: 'test_hello.py',
-    testRunner: 'pytest'
+    testRunner: 'pytest',
+    aiProvider: 'mock'
   };
 
   const ymlPath = path.join(wsDir, 'mutation_config.yml');
@@ -342,7 +344,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const activeYaml = loadYamlConfig(wsDir);
     const config = vscode.workspace.getConfiguration('mutationTesting');
-    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://core-service:8000');
 
     statusBarItem.text = "🧬 Running baseline...";
     outputChannel.show(true); 
@@ -561,7 +563,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const activeYaml = loadYamlConfig(wsDir);
     const config = vscode.workspace.getConfiguration('mutationTesting');
-    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://core-service:8000');
 
     if (activeMutantsList.length === 0) {
       vscode.window.showWarningMessage("Generate mutations before executing mutation tests.");
@@ -997,7 +999,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const activeYaml = loadYamlConfig(wsDir);
     const config = vscode.workspace.getConfiguration('mutationTesting');
-    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://core-service:8000');
     const aiProvider = config.get<string>('aiProvider', 'mock');
     const sourcePath = normalizeWorkspacePath(wsDir, mutant.file_path || mutant.filePath || '');
     const sourceExt = path.extname(sourcePath).toLowerCase();
@@ -1046,8 +1048,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const config = loadYamlConfig(wsDir || "");
-    const promUrl = (await vscode.env.asExternalUri(vscode.Uri.parse('http://localhost:9090'))).toString();
-    const grafUrl = (await vscode.env.asExternalUri(vscode.Uri.parse('http://localhost:3000'))).toString();
+    const promUrl = (await vscode.env.asExternalUri(vscode.Uri.parse(config.prometheusUrl))).toString();
+    const grafUrl = (await vscode.env.asExternalUri(vscode.Uri.parse(config.grafanaUrl))).toString();
+    const promOrigin = new URL(promUrl).origin;
+    const grafOrigin = new URL(grafUrl).origin;
 
     const panel = vscode.window.createWebviewPanel(
       'mutationDashboard',
@@ -1059,11 +1063,21 @@ export function activate(context: vscode.ExtensionContext) {
       }
     );
 
+    const contentSecurityPolicy = [
+      "default-src 'none'",
+      `img-src ${panel.webview.cspSource} https: data:`,
+      `style-src ${panel.webview.cspSource} 'unsafe-inline'`,
+      `script-src ${panel.webview.cspSource} 'unsafe-inline'`,
+      `connect-src ${promOrigin}`,
+      `frame-src ${grafOrigin}`
+    ].join('; ');
+
     // Dynamic, interactive SVG Live charts dashboard inside VS Code webview. Includes live connection to local Prometheus stats on :8000!
     panel.webview.html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy}">
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -1134,6 +1148,14 @@ export function activate(context: vscode.ExtensionContext) {
       opacity: 0.8;
       margin: 0;
     }
+    .connection-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 12px 0 0;
+      font-size: 0.85em;
+      opacity: 0.9;
+    }
     iframe {
       width: 100%;
       height: 380px;
@@ -1147,6 +1169,7 @@ export function activate(context: vscode.ExtensionContext) {
 <body>
   <h1>🧬 Mutation Live Observability Board</h1>
   <p style="font-size: 0.9em; margin-bottom: 12px; opacity: 0.9;">Continuous mutation testing platform performance indicators synced with Grafana OTel daemon.</p>
+  <div class="connection-banner"><span class="status-badge" id="connectionStatus">CONNECTING</span><span id="connectionStatusText">Checking Prometheus and Grafana connectivity...</span></div>
 
   <div class="section-title">🛡️ Platform Security & Quality Risk Indicators</div>
   <div class="grid">
@@ -1214,15 +1237,25 @@ export function activate(context: vscode.ExtensionContext) {
       Exposes the live, reactive Grafana monitoring suite running inside your Dev Container or localhost loopback port <code style="background:var(--vscode-textBlockCode-background); padding:1px 3px;">:3000</code>.
     </p>
     <!-- Live iframe load of local Grafana setup, with local HTML chart rendering fallback if Grafana container is offline -->
-    <iframe src="${grafUrl}/d-solo/mutation-performance/mutation-metrics?orgId=1&panelId=1" onerror="this.style.display='none';"></iframe>
+    <iframe src="${grafUrl}/d-solo/mutation-performance/mutation-metrics?orgId=1&panelId=1&refresh=5s" onerror="this.style.display='none';"></iframe>
   </div>
 
   <script>
     // Live loopback metric checker parsing the Otel /metrics pipeline
-    setInterval(() => {
-      fetch('${promUrl}/metrics')
+    const connectionStatus = document.getElementById('connectionStatus');
+    const connectionStatusText = document.getElementById('connectionStatusText');
+
+    const setConnectionState = (state, label, color) => {
+      connectionStatus.innerText = state;
+      connectionStatus.style.background = color;
+      connectionStatusText.innerText = label;
+    };
+
+    const refreshMetrics = () => {
+      fetch('${promUrl}/metrics?ts=' + Date.now(), { cache: 'no-store' })
         .then(res => res.text())
         .then(text => {
+          setConnectionState('CONNECTED', 'Prometheus metrics stream is responding.', '#4caf50');
           // Parse OpenTelemetry gauges
           const vulnMatch = text.match(/mutation_vulnerability_score\\s+([0-9.]+)/);
           if (vulnMatch) {
@@ -1263,8 +1296,14 @@ export function activate(context: vscode.ExtensionContext) {
             document.getElementById('sandboxTestsFailed').innerText = Math.round(parseFloat(sFailMatch[1]));
           }
         })
-        .catch(err => console.log('Otel Prom connection check...', err));
-    }, 2000);
+        .catch(err => {
+          setConnectionState('DISCONNECTED', 'Unable to reach Prometheus or Grafana. Check the container stack and published ports.', '#f44336');
+          console.log('Otel Prom connection check...', err);
+        });
+    };
+
+    refreshMetrics();
+    setInterval(refreshMetrics, 2000);
   </script>
 </body>
 </html>`;

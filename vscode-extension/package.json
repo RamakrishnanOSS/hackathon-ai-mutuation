@@ -226,6 +226,31 @@
           "default": "http://core-service:8000",
           "description": "The URL of the local FastAPI core engine backend"
         },
+        "mutationTesting.grafanaUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "The URL used by the in-editor dashboard to load Grafana"
+        },
+        "mutationTesting.prometheusUrl": {
+          "type": "string",
+          "default": "http://localhost:9090",
+          "description": "The URL used by the in-editor dashboard to load Prometheus metrics"
+        },
+        "mutationTesting.defaultSourceFile": {
+          "type": "string",
+          "default": "hello.py",
+          "description": "Default source file used when the extension opens or analyzes a workspace"
+        },
+        "mutationTesting.defaultTestFile": {
+          "type": "string",
+          "default": "test_hello.py",
+          "description": "Default test file used for AI test generation"
+        },
+        "mutationTesting.testRunner": {
+          "type": "string",
+          "default": "pytest",
+          "description": "Default test runner used for baseline and mutation execution"
+        },
         "mutationTesting.aiProvider": {
           "type": "string",
           "enum": ["openai", "ollama", "mock"],
