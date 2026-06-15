@@ -30,7 +30,7 @@ services:
     container_name: core-service
     volumes:
       - ./agent:/workspace:cached
-      - ./services:/workspace/services:cached
+      - ./services:/app/services:cached
     networks:
       - mutation-net
     ports:

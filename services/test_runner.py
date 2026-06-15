@@ -43,6 +43,16 @@ class TestRunnerAdapter(ABC):
 class PytestRunnerAdapter(TestRunnerAdapter):
     """Execution adapter implementing isolated Pytest runs."""
 
+    def _seed_services_package(self, sandbox_dir: str) -> None:
+        """Ensure the core service package is present in the sandbox for imports."""
+        sandbox_services = os.path.join(sandbox_dir, "services")
+        if os.path.isdir(sandbox_services):
+            return
+
+        image_services = "/app/services"
+        if os.path.isdir(image_services):
+            shutil.copytree(image_services, sandbox_services, dirs_exist_ok=True)
+
     def detect_workspace(self, root_path: str) -> bool:
         print(root_path)
         return os.path.exists(os.path.join(root_path, "pytest.ini")) or \
@@ -81,6 +91,8 @@ class PytestRunnerAdapter(TestRunnerAdapter):
             else:
                 shutil.copy2(src_path, dst_path)
 
+        self._seed_services_package(sandbox_dir)
+
         # Step 3: Inject mutated file projection in virtual sandbox
         if mutated_code is not None:
             # Normalize paths to handle potential drive casing differences on Windows
@@ -106,6 +118,8 @@ class PytestRunnerAdapter(TestRunnerAdapter):
             env_paths = [sandbox_dir]
             if os.path.exists(os.path.join(sandbox_dir, "agent")):
                 env_paths.append(os.path.join(sandbox_dir, "agent"))
+            if os.path.exists(os.path.join(sandbox_dir, "services")):
+                env_paths.append(os.path.join(sandbox_dir, "services"))
             env["PYTHONPATH"] = os.path.pathsep.join(env_paths)
 
             # To stay responsive, target test selection runs if provided
@@ -221,6 +235,16 @@ class PytestRunnerAdapter(TestRunnerAdapter):
 class CppRunnerAdapter(TestRunnerAdapter):
     """Execution adapter implementing isolated C++ GoogleTest runs using standard g++ compiler."""
 
+    def _seed_services_package(self, sandbox_dir: str) -> None:
+        """Ensure the core service package is present in the sandbox for imports."""
+        sandbox_services = os.path.join(sandbox_dir, "services")
+        if os.path.isdir(sandbox_services):
+            return
+
+        image_services = "/app/services"
+        if os.path.isdir(image_services):
+            shutil.copytree(image_services, sandbox_services, dirs_exist_ok=True)
+
     def detect_workspace(self, root_path: str) -> bool:
         # Check for any C/C++ source file (non-test) in agent/ or workspace root
         C_EXTS = ('.c', '.cpp', '.cc', '.cxx')
@@ -261,6 +285,8 @@ class CppRunnerAdapter(TestRunnerAdapter):
                 shutil.copytree(src_path, dst_path, ignore=ignore_patterns, dirs_exist_ok=True)
             else:
                 shutil.copy2(src_path, dst_path)
+
+        self._seed_services_package(sandbox_dir)
 
         # Step 3: Inject mutated file projection in virtual sandbox
         if mutated_code is not None:
