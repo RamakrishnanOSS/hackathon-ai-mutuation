@@ -1,0 +1,1148 @@
+name: AI Mutation Testing CI
+
+run-name: >-
+  AI Mutation Testing (${{ github.event_name == 'workflow_dispatch' &&
+  format('manual | branch={0} | scope={1} | langs={2}', inputs.target_branch, inputs.mutation_scope, inputs.mutation_languages) ||
+  github.ref_name }})
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - feature/**
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch to run"
+        required: true
+        type: choice
+        default: main
+        options:
+          - main
+          - develop
+      mutation_scope:
+        description: "Folder to scan for mutation targets"
+        required: true
+        type: string
+        default: agent
+      mutation_languages:
+        description: "Languages to run mutation testing on"
+        required: true
+        type: choice
+        default: "all"
+        options:
+          - all
+          - python
+          - c
+          - cpp
+          - python,c
+          - python,cpp
+          - c,cpp
+      run_c_tests:
+        description: "Run C compile & test job"
+        required: false
+        type: boolean
+        default: true
+      run_cpp_tests:
+        description: "Run C++ compile & test job"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # JOB 1 — Lint (non-blocking)
+  # ─────────────────────────────────────────────────────────────
+  lint:
+    name: "1 · Lint (Non-Blocking)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install flake8
+        run: pip install flake8 flake8-bugbear flake8-html
+      - name: Generate flake8 HTML report
+        shell: bash
+        run: |
+          mkdir -p reports/flake8-html
+          PY_FILES=$(find agent -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
+          ROOT_PY=$(find . -maxdepth 1 -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
+          if [ -z "$PY_FILES$ROOT_PY" ]; then
+            python3 -c "
+          from pathlib import Path
+          Path('reports/flake8-html/index.html').write_text(
+              '<html><body><h1>No Python files found to lint.</h1></body></html>', encoding='utf-8')"
+            exit 0
+          fi
+          flake8 $PY_FILES $ROOT_PY \
+            --max-line-length=120 \
+            --extend-ignore=E203,W503,E501,W293,E261,E302,E305,E201,E202,F401,B007,E127 \
+            --format=html --htmldir=reports/flake8-html --statistics || true
+      # - name: Upload flake8 report
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: flake8-html
+      #     path: reports/flake8-html/
+      #     if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2 — Python Unit Tests
+  # ─────────────────────────────────────────────────────────────
+  unit_tests:
+    name: "2 · Python Unit Tests"
+    runs-on: ubuntu-latest
+    needs: lint
+    outputs:
+      total:   ${{ steps.metrics.outputs.total }}
+      passed:  ${{ steps.metrics.outputs.passed }}
+      failed:  ${{ steps.metrics.outputs.failed }}
+      errors:  ${{ steps.metrics.outputs.errors }}
+      skipped: ${{ steps.metrics.outputs.skipped }}
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-html junit2html
+      - name: Create reports directory
+        run: mkdir -p reports
+      - name: Collect Python source & test files
+        shell: bash
+        run: |
+          mkdir -p reports/python-sources/agent
+          find agent -type f -name '*.py' 2>/dev/null | while read f; do
+            dest="reports/python-sources/$f"
+            mkdir -p "$(dirname "$dest")"
+            cp "$f" "$dest"
+          done
+          find agent -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
+            | sort > reports/pytest-files.txt
+          echo "=== Test files discovered ===" && cat reports/pytest-files.txt || true
+      - name: Run pytest
+        shell: bash
+        run: |
+          set +e
+          if [ ! -s reports/pytest-files.txt ]; then
+            echo "No Python test files found."
+            python3 -c "
+          from pathlib import Path
+          Path('reports/pytest-report.html').write_text(
+              '<html><body><h1>No test files found.</h1></body></html>', encoding='utf-8')"
+            echo "0" > reports/pytest-exit-code.txt
+            exit 0
+          fi
+          TEST_FILES=$(tr '\n' ' ' < reports/pytest-files.txt)
+          python -m pytest $TEST_FILES -v --tb=short \
+            --junitxml=reports/pytest-results.xml \
+            --html=reports/pytest-report.html \
+            --self-contained-html --no-header
+          echo "$?" > reports/pytest-exit-code.txt
+          set -e
+      - name: Convert JUnit XML to HTML
+        run: |
+          if [ -f reports/pytest-results.xml ]; then
+            junit2html reports/pytest-results.xml reports/pytest-junit-report.html || true
+          fi
+      - name: Parse pytest metrics
+        id: metrics
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          total = passed = failed = errors = skipped = 0
+          xml_file = "reports/pytest-results.xml"
+          if os.path.exists(xml_file):
+              root = ET.parse(xml_file).getroot()
+              suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+              for suite in suites:
+                  total   += int(suite.attrib.get("tests",    0))
+                  failed  += int(suite.attrib.get("failures", 0))
+                  errors  += int(suite.attrib.get("errors",   0))
+                  skipped += int(suite.attrib.get("skipped",  0))
+          passed = max(total - failed - errors - skipped, 0)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"total={total}\npassed={passed}\nfailed={failed}\nerrors={errors}\nskipped={skipped}\n")
+          print(f"pytest: total={total} passed={passed} failed={failed}")
+          PY
+      - name: Upload pytest artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-results
+          path: |
+            reports/pytest-report.html
+            reports/pytest-junit-report.html
+            reports/pytest-results.xml
+            reports/pytest-files.txt
+            reports/python-sources/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 3A — C Compile & Test
+  # ─────────────────────────────────────────────────────────────
+  c_tests:
+    name: "3A · C Compile & Test"
+    runs-on: ubuntu-latest
+    needs: lint
+    continue-on-error: true
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_c_tests) }}
+    outputs:
+      files:        ${{ steps.metrics.outputs.files }}
+      compile_pass: ${{ steps.metrics.outputs.compile_pass }}
+      compile_fail: ${{ steps.metrics.outputs.compile_fail }}
+      run_pass:     ${{ steps.metrics.outputs.run_pass }}
+      run_fail:     ${{ steps.metrics.outputs.run_fail }}
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y gcc make
+      - name: Create reports directory
+        run: mkdir -p reports
+      - name: Collect C files
+        shell: bash
+        run: |
+          mkdir -p reports/c-sources
+          find agent -type f \( -name '*.c' -o -name '*.h' \) 2>/dev/null | while read f; do
+            cp "$f" "reports/c-sources/$(basename "$f")"
+          done
+          find agent -type f -name 'test_*.c' | sort > reports/c-test-files.txt
+          echo "=== C test files ===" && cat reports/c-test-files.txt || true
+      - name: Compile and run C tests
+        id: metrics
+        shell: bash
+        run: |
+          set +e
+          LOG="reports/c-build.log"; : > "$LOG"
+          FILES=0; COMPILE_PASS=0; COMPILE_FAIL=0; RUN_PASS=0; RUN_FAIL=0
+          if [ ! -s reports/c-test-files.txt ]; then
+            echo "No C test files discovered." | tee -a "$LOG"
+          else
+            while read -r TEST_FILE; do
+              [ -z "$TEST_FILE" ] && continue
+              FILES=$((FILES + 1))
+              BASENAME=$(basename "$TEST_FILE")
+              STEM="${BASENAME#test_}"; STEM="${STEM%.c}"
+              DIR=$(dirname "$TEST_FILE")
+              SRC=""; [ -f "$DIR/${STEM}.c" ] && SRC="$DIR/${STEM}.c"
+              OUT="/tmp/${STEM}_c_test"
+              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
+              echo "========================================" | tee -a "$LOG"
+              echo "C TEST : $TEST_FILE | SRC: ${SRC:-none}" | tee -a "$LOG"
+              if [ -n "$SRC" ]; then
+                gcc -std=c11 -Wall $INCLUDES -o "$OUT" "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
+              else
+                gcc -std=c11 -Wall $INCLUDES -o "$OUT" "$TEST_FILE" >> "$LOG" 2>&1
+              fi
+              if [ $? -eq 0 ]; then
+                COMPILE_PASS=$((COMPILE_PASS + 1))
+                echo "[BUILD PASS] $TEST_FILE" | tee -a "$LOG"
+                "$OUT" >> "$LOG" 2>&1
+                if [ $? -eq 0 ]; then
+                  RUN_PASS=$((RUN_PASS + 1)); echo "[RUN PASS]" | tee -a "$LOG"
+                else
+                  RUN_FAIL=$((RUN_FAIL + 1)); echo "[RUN FAIL]" | tee -a "$LOG"
+                fi
+              else
+                COMPILE_FAIL=$((COMPILE_FAIL + 1))
+                echo "[BUILD FAIL] $TEST_FILE" | tee -a "$LOG"
+              fi
+            done < reports/c-test-files.txt
+          fi
+          { echo "files=$FILES"; echo "compile_pass=$COMPILE_PASS"; echo "compile_fail=$COMPILE_FAIL"
+            echo "run_pass=$RUN_PASS"; echo "run_fail=$RUN_FAIL"; } >> "$GITHUB_OUTPUT"
+      - name: Upload C artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-test-results
+          path: |
+            reports/c-build.log
+            reports/c-test-files.txt
+            reports/c-sources/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 3B — C++ Compile & Test
+  # ─────────────────────────────────────────────────────────────
+  cpp_tests:
+    name: "3B · C++ Compile & Test"
+    runs-on: ubuntu-latest
+    needs: lint
+    continue-on-error: true
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_cpp_tests) }}
+    outputs:
+      files:        ${{ steps.metrics.outputs.files }}
+      compile_pass: ${{ steps.metrics.outputs.compile_pass }}
+      compile_fail: ${{ steps.metrics.outputs.compile_fail }}
+      run_pass:     ${{ steps.metrics.outputs.run_pass }}
+      run_fail:     ${{ steps.metrics.outputs.run_fail }}
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y g++ make
+      - name: Create reports directory
+        run: mkdir -p reports
+      - name: Collect C++ files
+        shell: bash
+        run: |
+          mkdir -p reports/cpp-sources
+          find agent -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \) \
+            2>/dev/null | while read f; do cp "$f" "reports/cpp-sources/$(basename "$f")"; done
+          find agent -type f \( -name 'test_*.cpp' -o -name 'test_*.cc' \) \
+            | sort > reports/cpp-test-files.txt
+          echo "=== C++ test files ===" && cat reports/cpp-test-files.txt || true
+      - name: Compile and run C++ tests
+        id: metrics
+        shell: bash
+        run: |
+          set +e
+          LOG="reports/cpp-build.log"; : > "$LOG"
+          FILES=0; COMPILE_PASS=0; COMPILE_FAIL=0; RUN_PASS=0; RUN_FAIL=0
+          if [ ! -s reports/cpp-test-files.txt ]; then
+            echo "No C++ test files discovered." | tee -a "$LOG"
+          else
+            while read -r TEST_FILE; do
+              [ -z "$TEST_FILE" ] && continue
+              FILES=$((FILES + 1))
+              BASENAME=$(basename "$TEST_FILE"); STEM="${BASENAME#test_}"; STEM="${STEM%.*}"
+              EXT="${BASENAME##*.}"; DIR=$(dirname "$TEST_FILE")
+              SRC=""
+              if   [ -f "$DIR/${STEM}.${EXT}" ]; then SRC="$DIR/${STEM}.${EXT}"
+              elif [ -f "$DIR/${STEM}.cpp"     ]; then SRC="$DIR/${STEM}.cpp"
+              elif [ -f "$DIR/${STEM}.cc"      ]; then SRC="$DIR/${STEM}.cc"
+              fi
+              OUT="/tmp/${STEM}_cpp_test"
+              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
+              echo "========================================"   | tee -a "$LOG"
+              echo "C++ TEST: $TEST_FILE | SRC: ${SRC:-none}" | tee -a "$LOG"
+              if [ -n "$SRC" ]; then
+                g++ -std=c++17 -Wall $INCLUDES -o "$OUT" "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
+              else
+                g++ -std=c++17 -Wall $INCLUDES -o "$OUT" "$TEST_FILE" >> "$LOG" 2>&1
+              fi
+              if [ $? -eq 0 ]; then
+                COMPILE_PASS=$((COMPILE_PASS + 1)); echo "[BUILD PASS] $TEST_FILE" | tee -a "$LOG"
+                "$OUT" >> "$LOG" 2>&1
+                if [ $? -eq 0 ]; then
+                  RUN_PASS=$((RUN_PASS + 1)); echo "[RUN PASS]" | tee -a "$LOG"
+                else
+                  RUN_FAIL=$((RUN_FAIL + 1)); echo "[RUN FAIL]" | tee -a "$LOG"
+                fi
+              else
+                COMPILE_FAIL=$((COMPILE_FAIL + 1)); echo "[BUILD FAIL] $TEST_FILE" | tee -a "$LOG"
+              fi
+            done < reports/cpp-test-files.txt
+          fi
+          { echo "files=$FILES"; echo "compile_pass=$COMPILE_PASS"; echo "compile_fail=$COMPILE_FAIL"
+            echo "run_pass=$RUN_PASS"; echo "run_fail=$RUN_FAIL"; } >> "$GITHUB_OUTPUT"
+      - name: Upload C++ artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-test-results
+          path: |
+            reports/cpp-build.log
+            reports/cpp-test-files.txt
+            reports/cpp-sources/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 4 — Python Mutation Testing
+  # ─────────────────────────────────────────────────────────────
+  mutation_tests:
+    name: "4 · Python Mutation Testing"
+    runs-on: ubuntu-latest
+    needs: unit_tests
+    continue-on-error: true
+    if: >-
+      ${{
+        always() && (
+          github.event_name != 'workflow_dispatch' ||
+          inputs.mutation_languages == 'all' ||
+          contains(inputs.mutation_languages, 'python')
+        )
+      }}
+    outputs:
+      killed:         ${{ steps.metrics.outputs.killed }}
+      survived:       ${{ steps.metrics.outputs.survived }}
+      timeout:        ${{ steps.metrics.outputs.timeout }}
+      total_mutants:  ${{ steps.metrics.outputs.total_mutants }}
+      mutation_score: ${{ steps.metrics.outputs.mutation_score }}
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # Write setup.cfg BEFORE pip installs mutmut.
+      # mutmut reads setup.cfg at import time — must exist before first binary call.
+      #
+      # We do NOT set "runner" — providing a custom runner caused pytest exit code 5
+      # ("no tests collected") on every mutant because the path was unresolvable.
+      # mutmut builds its own correct pytest command from tests_dir.
+      #
+      # Heredoc MUST start at column 0. Leading spaces make INI keys unrecognised.
+      - name: Determine scope and write setup.cfg [mutmut]
+        id: scope
+        shell: bash
+        run: |
+          SCOPE="${{ github.event_name == 'workflow_dispatch' && inputs.mutation_scope || 'agent' }}"
+          echo "scope=$SCOPE" >> "$GITHUB_OUTPUT"
+          echo "Mutation scope: $SCOPE"
+
+          # Comma-separated dirs containing non-test source .py files
+          SRC_PATHS=$(find "$SCOPE" -type f -name '*.py' \
+            ! -name 'test_*.py' ! -name '*_test.py' 2>/dev/null \
+            | xargs -I{} dirname {} 2>/dev/null | sort -u \
+            | tr '\n' ',' | sed 's/,$//')
+
+          # Comma-separated dirs containing test files
+          TEST_DIRS=$(find "$SCOPE" -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
+            2>/dev/null | xargs -I{} dirname {} 2>/dev/null | sort -u \
+            | tr '\n' ',' | sed 's/,$//')
+
+          [ -z "$SRC_PATHS" ] && SRC_PATHS="$SCOPE"
+          [ -z "$TEST_DIRS"  ] && TEST_DIRS="$SCOPE"
+
+          echo "paths_to_mutate : $SRC_PATHS"
+          echo "tests_dir   : $TEST_DIRS"
+
+          # Strip any existing [mutmut] block
+          if [ -f setup.cfg ]; then
+            python3 -c "
+          import re, pathlib
+          text = pathlib.Path('setup.cfg').read_text(errors='ignore')
+          text = re.sub(r'\[mutmut\].*?(?=\n\[|\Z)', '', text, flags=re.DOTALL)
+          pathlib.Path('setup.cfg').write_text(text.rstrip() + '\n')"
+          fi
+
+          # Keys must be flush-left — do NOT indent this heredoc
+          cat >> setup.cfg << CFG
+
+          [mutmut]
+          paths_to_mutate = ${SRC_PATHS}
+          tests_dir = ${TEST_DIRS}
+          tests_dirs = ${TEST_DIRS}
+          max_stack_depth = 8
+          mutate_only_covered_lines = true
+          timeout_multiplier = 8.0
+          CFG
+
+          echo "=== setup.cfg [mutmut] ==="
+          grep -A5 '^\[mutmut\]' setup.cfg || true
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install "mutmut==2.4.4" pytest pytest-cov
+
+      - name: Clear mutmut cache
+        run: rm -f .mutmut-cache
+
+      - name: Build pytest coverage map for mutmut
+        shell: bash
+        run: |
+          set +e
+          SCOPE="${{ steps.scope.outputs.scope }}"
+          # Coverage map lets mutmut skip uncovered lines and speed up mutant runs.
+          python -m pytest "$SCOPE" -q --maxfail=1 --disable-warnings \
+            --cov="$SCOPE" --cov-branch --cov-report=term-missing:skip-covered
+          PYTEST_EXIT=$?
+          if [ "$PYTEST_EXIT" -ne 0 ]; then
+            echo "Coverage warmup pytest exited with code $PYTEST_EXIT; continuing with mutmut."
+          fi
+          set -e
+
+      - name: Debug — confirm files mutmut will see
+        continue-on-error: true
+        shell: bash
+        run: |
+          SCOPE="${{ steps.scope.outputs.scope }}"
+          echo "=== mutmut version ===" && pip show mutmut | grep -E "^(Name|Version)"
+          echo "=== setup.cfg [mutmut] ==="
+          grep -A10 '^\[mutmut\]' setup.cfg || echo "NOT FOUND"
+          echo "=== Source files ===" && find "$SCOPE" -type f -name '*.py' ! -name 'test_*.py' ! -name '*_test.py' | sort
+          echo "=== Test files ===" && find "$SCOPE" -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort
+
+      - name: Run mutmut
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports/mutants
+          SCOPE="${{ steps.scope.outputs.scope }}"
+          SRC_FILES=$(find "$SCOPE" -type f -name '*.py' \
+            ! -name 'test_*.py' ! -name '*_test.py' 2>/dev/null | sort)
+          if [ -z "$SRC_FILES" ]; then
+            echo "No Python source files to mutate in $SCOPE"
+            printf "killed=0\nsurvived=0\ntimeout=0\n" > reports/mutmut-counts.txt
+            exit 0
+          fi
+          mutmut run 2>&1 | tee reports/mutmut-run.log
+          mutmut results 2>/dev/null | tee reports/mutmut-results.log || true
+          mutmut junitxml > reports/mutmut-results.xml 2>/dev/null || true
+
+          # Layer 1: result-ids subcommand
+          count_result_ids () {
+            local status="$1"
+            mutmut result-ids "$status" 2>/dev/null \
+              | awk '/^[0-9]+$/ { c++ } END { print c+0 }'
+          }
+          KILLED=$(count_result_ids killed)
+          SURVIVED=$(count_result_ids survived)
+          TIMEOUT=$(count_result_ids timeout)
+          # Layer 2: summary line
+          if [ "${KILLED:-0}" -eq 0 ] && [ "${SURVIVED:-0}" -eq 0 ]; then
+            _K=$(grep -oP '\d+(?=\s+killed)'       reports/mutmut-run.log 2>/dev/null | tail -1)
+            _S=$(grep -oP '\d+(?=\s+survived)'     reports/mutmut-run.log 2>/dev/null | tail -1)
+            _T=$(grep -oP '\d+(?=\s+timed?\s*out)' reports/mutmut-run.log 2>/dev/null | tail -1)
+            [ -n "$_K" ] && KILLED=$_K; [ -n "$_S" ] && SURVIVED=$_S; [ -n "$_T" ] && TIMEOUT=$_T
+          fi
+          # Layer 3: emoji spinner
+          if [ "${KILLED:-0}" -eq 0 ] && [ "${SURVIVED:-0}" -eq 0 ]; then
+            _K=$(grep -oP '🎉\s*\K\d+' reports/mutmut-run.log 2>/dev/null | tail -1)
+            _S=$(grep -oP '🙁\s*\K\d+' reports/mutmut-run.log 2>/dev/null | tail -1)
+            _T=$(grep -oP '⏰\s*\K\d+'  reports/mutmut-run.log 2>/dev/null | tail -1)
+            [ -n "$_K" ] && KILLED=$_K; [ -n "$_S" ] && SURVIVED=$_S; [ -n "$_T" ] && TIMEOUT=$_T
+          fi
+
+          KILLED=${KILLED:-0}; SURVIVED=${SURVIVED:-0}; TIMEOUT=${TIMEOUT:-0}
+          printf "killed=%s\nsurvived=%s\ntimeout=%s\n" "$KILLED" "$SURVIVED" "$TIMEOUT" > reports/mutmut-counts.txt
+          echo "Summary: killed=$KILLED survived=$SURVIVED timeout=$TIMEOUT"
+
+          # Save diffs for survived mutants
+          SURVIVED_IDS=$(mutmut result-ids survived 2>/dev/null || true)
+          for ID in $SURVIVED_IDS; do
+            [ -z "$ID" ] && continue
+            mutmut show "$ID" > "reports/mutants/mutant-${ID}.diff" 2>/dev/null || true
+          done
+          set -e
+
+      - name: Parse mutation metrics
+        id: metrics
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          killed = survived = timeout = 0
+          counts = Path("reports/mutmut-counts.txt")
+          if counts.exists():
+              for line in counts.read_text().splitlines():
+                  k, _, v = line.partition("=")
+                  if v.strip().isdigit():
+                      if k == "killed":   killed   = int(v)
+                      if k == "survived": survived = int(v)
+                      if k == "timeout":  timeout  = int(v)
+          if killed == 0 and survived == 0:
+              log = Path("reports/mutmut-run.log")
+              if log.exists():
+                  text = log.read_text(errors="ignore")
+                  for pat, key in [
+                      (r"(\d+)\s+killed", "killed"), (r"(\d+)\s+survived", "survived"),
+                      (r"(\d+)\s+timed?\s*out", "timeout"),
+                      (r"🎉\s*(\d+)", "killed"), (r"🙁\s*(\d+)", "survived"), (r"⏰\s*(\d+)", "timeout"),
+                  ]:
+                      m = re.search(pat, text, re.IGNORECASE)
+                      if m:
+                          val = int(m.group(1))
+                          if key == "killed":   killed   = max(killed,   val)
+                          if key == "survived": survived = max(survived, val)
+                          if key == "timeout":  timeout  = max(timeout,  val)
+          total = killed + survived + timeout
+          score = round((killed / total) * 100, 2) if total > 0 else 0.0
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"killed={killed}\nsurvived={survived}\ntimeout={timeout}\n")
+              f.write(f"total_mutants={total}\nmutation_score={score}\n")
+          print(f"Python mutation — killed={killed} survived={survived} timeout={timeout} total={total} score={score}%")
+          PY
+
+      - name: Upload mutation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-test-results
+          path: |
+            reports/mutmut-run.log
+            reports/mutmut-results.log
+            reports/mutmut-counts.txt
+            reports/mutmut-results.xml
+            reports/mutants/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 4B — C Mutation Testing (universalmutator)
+  # ─────────────────────────────────────────────────────────────
+  c_mutation:
+    name: "4B · C Mutation Testing"
+    runs-on: ubuntu-latest
+    needs: c_tests
+    continue-on-error: true
+    if: >-
+      ${{
+        always() && (
+          github.event_name != 'workflow_dispatch' ||
+          inputs.mutation_languages == 'all' ||
+          contains(inputs.mutation_languages, 'c')
+        ) && (github.event_name != 'workflow_dispatch' || inputs.run_c_tests)
+      }}
+    outputs:
+      killed:   ${{ steps.metrics.outputs.killed }}
+      survived: ${{ steps.metrics.outputs.survived }}
+      total:    ${{ steps.metrics.outputs.total }}
+      score:    ${{ steps.metrics.outputs.score }}
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y gcc make
+          pip install universalmutator
+      - name: Run C mutation testing
+        id: metrics
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports/c-mutants
+          LOG="reports/c-mutation.log"; : > "$LOG"
+          KILLED=0; SURVIVED=0; TOTAL=0
+          SRC_FILES=$(find agent -type f -name '*.c' ! -name 'test_*.c' 2>/dev/null | sort)
+          if [ -z "$SRC_FILES" ]; then
+            echo "No C source files to mutate." | tee -a "$LOG"
+          else
+            for SRC in $SRC_FILES; do
+              STEM=$(basename "$SRC" .c); DIR=$(dirname "$SRC")
+              TEST_FILE="$DIR/test_${STEM}.c"
+              if [ ! -f "$TEST_FILE" ]; then
+                echo "SKIP (no test): $SRC" | tee -a "$LOG"; continue
+              fi
+              MUTANT_DIR="reports/c-mutants/${STEM}"
+              mkdir -p "$MUTANT_DIR"
+              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
+              echo "========================================" | tee -a "$LOG"
+              echo "Mutating: $SRC | Test: $TEST_FILE"       | tee -a "$LOG"
+              mutate "$SRC" --mutantDir "$MUTANT_DIR" >> "$LOG" 2>&1 || true
+              MCOUNT=$(find "$MUTANT_DIR" -name '*.c' | wc -l)
+              echo "Generated $MCOUNT mutants" | tee -a "$LOG"
+              gcc -std=c11 -Wall $INCLUDES -o /tmp/orig_c_test "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
+              if [ $? -ne 0 ]; then
+                echo "BASELINE COMPILE FAIL — skip" | tee -a "$LOG"; continue
+              fi
+              /tmp/orig_c_test >> "$LOG" 2>&1; BASELINE=$?
+              echo "Baseline exit: $BASELINE" | tee -a "$LOG"
+              for MUTANT in "$MUTANT_DIR"/*.c; do
+                [ -f "$MUTANT" ] || continue
+                TOTAL=$((TOTAL + 1))
+                MID=$(basename "$MUTANT" .c)
+                gcc -std=c11 -Wall $INCLUDES -o /tmp/mut_c_test "$MUTANT" "$TEST_FILE" >> "$LOG" 2>&1
+                if [ $? -ne 0 ]; then
+                  KILLED=$((KILLED + 1)); echo "[KILLED-COMPILE] $MID" | tee -a "$LOG"; continue
+                fi
+                /tmp/mut_c_test >> "$LOG" 2>&1; RUN_EXIT=$?
+                if [ "$RUN_EXIT" -ne "$BASELINE" ]; then
+                  KILLED=$((KILLED + 1)); echo "[KILLED] $MID" | tee -a "$LOG"
+                else
+                  SURVIVED=$((SURVIVED + 1)); echo "[SURVIVED] $MID" | tee -a "$LOG"
+                  diff "$SRC" "$MUTANT" > "$MUTANT_DIR/${MID}.diff" 2>/dev/null || true
+                fi
+              done
+            done
+          fi
+          SCORE=$(python3 -c "print(round($KILLED/$TOTAL*100,2) if $TOTAL>0 else 0.0)" || echo 0)
+          echo "C mutation: killed=$KILLED survived=$SURVIVED total=$TOTAL score=$SCORE%" | tee -a "$LOG"
+          { echo "killed=$KILLED"; echo "survived=$SURVIVED"
+            echo "total=$TOTAL";   echo "score=$SCORE"; } >> "$GITHUB_OUTPUT"
+          set -e
+      - name: Upload C mutation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-mutation-results
+          path: |
+            reports/c-mutation.log
+            reports/c-mutants/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 4C — C++ Mutation Testing (universalmutator)
+  # ─────────────────────────────────────────────────────────────
+  cpp_mutation:
+    name: "4C · C++ Mutation Testing"
+    runs-on: ubuntu-latest
+    needs: cpp_tests
+    continue-on-error: true
+    if: >-
+      ${{
+        always() && (
+          github.event_name != 'workflow_dispatch' ||
+          inputs.mutation_languages == 'all' ||
+          contains(inputs.mutation_languages, 'cpp')
+        ) && (github.event_name != 'workflow_dispatch' || inputs.run_cpp_tests)
+      }}
+    outputs:
+      killed:   ${{ steps.metrics.outputs.killed }}
+      survived: ${{ steps.metrics.outputs.survived }}
+      total:    ${{ steps.metrics.outputs.total }}
+      score:    ${{ steps.metrics.outputs.score }}
+    steps:
+      - name: Checkout repository (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
+      - name: Checkout repository (push / PR)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y g++ make
+          pip install universalmutator
+      - name: Run C++ mutation testing
+        id: metrics
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports/cpp-mutants
+          LOG="reports/cpp-mutation.log"; : > "$LOG"
+          KILLED=0; SURVIVED=0; TOTAL=0
+          SRC_FILES=$(find agent -type f \( -name '*.cpp' -o -name '*.cc' \) \
+            ! -name 'test_*' 2>/dev/null | sort)
+          if [ -z "$SRC_FILES" ]; then
+            echo "No C++ source files to mutate." | tee -a "$LOG"
+          else
+            for SRC in $SRC_FILES; do
+              STEM_FULL=$(basename "$SRC"); STEM="${STEM_FULL%.*}"; DIR=$(dirname "$SRC")
+              TEST_FILE=""
+              for TRY in "$DIR/test_${STEM}.cpp" "$DIR/test_${STEM}.cc"; do
+                [ -f "$TRY" ] && TEST_FILE="$TRY" && break
+              done
+              if [ -z "$TEST_FILE" ]; then
+                echo "SKIP (no test): $SRC" | tee -a "$LOG"; continue
+              fi
+              MUTANT_DIR="reports/cpp-mutants/${STEM}"
+              mkdir -p "$MUTANT_DIR"
+              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
+              echo "========================================" | tee -a "$LOG"
+              echo "Mutating: $SRC | Test: $TEST_FILE"       | tee -a "$LOG"
+              mutate "$SRC" --mutantDir "$MUTANT_DIR" >> "$LOG" 2>&1 || true
+              MCOUNT=$(find "$MUTANT_DIR" \( -name '*.cpp' -o -name '*.cc' \) | wc -l)
+              echo "Generated $MCOUNT mutants" | tee -a "$LOG"
+              g++ -std=c++17 -Wall $INCLUDES -o /tmp/orig_cpp_test "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
+              if [ $? -ne 0 ]; then
+                echo "BASELINE COMPILE FAIL — skip" | tee -a "$LOG"; continue
+              fi
+              /tmp/orig_cpp_test >> "$LOG" 2>&1; BASELINE=$?
+              echo "Baseline exit: $BASELINE" | tee -a "$LOG"
+              for MUTANT in "$MUTANT_DIR"/*.cpp "$MUTANT_DIR"/*.cc; do
+                [ -f "$MUTANT" ] || continue
+                TOTAL=$((TOTAL + 1))
+                MID_FULL=$(basename "$MUTANT"); MID="${MID_FULL%.*}"
+                g++ -std=c++17 -Wall $INCLUDES -o /tmp/mut_cpp_test "$MUTANT" "$TEST_FILE" >> "$LOG" 2>&1
+                if [ $? -ne 0 ]; then
+                  KILLED=$((KILLED + 1)); echo "[KILLED-COMPILE] $MID" | tee -a "$LOG"; continue
+                fi
+                /tmp/mut_cpp_test >> "$LOG" 2>&1; RUN_EXIT=$?
+                if [ "$RUN_EXIT" -ne "$BASELINE" ]; then
+                  KILLED=$((KILLED + 1)); echo "[KILLED] $MID" | tee -a "$LOG"
+                else
+                  SURVIVED=$((SURVIVED + 1)); echo "[SURVIVED] $MID" | tee -a "$LOG"
+                  diff "$SRC" "$MUTANT" > "$MUTANT_DIR/${MID}.diff" 2>/dev/null || true
+                fi
+              done
+            done
+          fi
+          SCORE=$(python3 -c "print(round($KILLED/$TOTAL*100,2) if $TOTAL>0 else 0.0)" || echo 0)
+          echo "C++ mutation: killed=$KILLED survived=$SURVIVED total=$TOTAL score=$SCORE%" | tee -a "$LOG"
+          { echo "killed=$KILLED"; echo "survived=$SURVIVED"
+            echo "total=$TOTAL";   echo "score=$SCORE"; } >> "$GITHUB_OUTPUT"
+          set -e
+      - name: Upload C++ mutation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-mutation-results
+          path: |
+            reports/cpp-mutation.log
+            reports/cpp-mutants/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 5 — Combined HTML Report
+  # Pulls outputs from all jobs and builds one self-contained
+  # report.html showing unit tests + all mutation scores +
+  # killed/survived mutant diffs per language.
+  # ─────────────────────────────────────────────────────────────
+  combined_report:
+    name: "5 · Combined HTML Report"
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - unit_tests
+      - mutation_tests
+      - c_tests
+      - cpp_tests
+      - c_mutation
+      - cpp_mutation
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded/
+
+      - name: Build combined report
+        env:
+          UT_TOTAL:        ${{ needs.unit_tests.outputs.total    || '0' }}
+          UT_PASSED:       ${{ needs.unit_tests.outputs.passed   || '0' }}
+          UT_FAILED:       ${{ needs.unit_tests.outputs.failed   || '0' }}
+          UT_ERRORS:       ${{ needs.unit_tests.outputs.errors   || '0' }}
+          UT_SKIPPED:      ${{ needs.unit_tests.outputs.skipped  || '0' }}
+          PY_KILLED:       ${{ needs.mutation_tests.outputs.killed        || '0' }}
+          PY_SURVIVED:     ${{ needs.mutation_tests.outputs.survived      || '0' }}
+          PY_TIMEOUT:      ${{ needs.mutation_tests.outputs.timeout       || '0' }}
+          PY_TOTAL:        ${{ needs.mutation_tests.outputs.total_mutants || '0' }}
+          PY_SCORE:        ${{ needs.mutation_tests.outputs.mutation_score || '0' }}
+          C_FILES:         ${{ needs.c_tests.outputs.files        || '0' }}
+          C_COMPILE_PASS:  ${{ needs.c_tests.outputs.compile_pass || '0' }}
+          C_COMPILE_FAIL:  ${{ needs.c_tests.outputs.compile_fail || '0' }}
+          C_RUN_PASS:      ${{ needs.c_tests.outputs.run_pass     || '0' }}
+          C_RUN_FAIL:      ${{ needs.c_tests.outputs.run_fail     || '0' }}
+          C_KILLED:        ${{ needs.c_mutation.outputs.killed    || '0' }}
+          C_SURVIVED:      ${{ needs.c_mutation.outputs.survived  || '0' }}
+          C_TOTAL:         ${{ needs.c_mutation.outputs.total     || '0' }}
+          C_SCORE:         ${{ needs.c_mutation.outputs.score     || '0' }}
+          CPP_FILES:       ${{ needs.cpp_tests.outputs.files        || '0' }}
+          CPP_COMPILE_PASS: ${{ needs.cpp_tests.outputs.compile_pass || '0' }}
+          CPP_COMPILE_FAIL: ${{ needs.cpp_tests.outputs.compile_fail || '0' }}
+          CPP_RUN_PASS:    ${{ needs.cpp_tests.outputs.run_pass     || '0' }}
+          CPP_RUN_FAIL:    ${{ needs.cpp_tests.outputs.run_fail     || '0' }}
+          CPP_KILLED:      ${{ needs.cpp_mutation.outputs.killed    || '0' }}
+          CPP_SURVIVED:    ${{ needs.cpp_mutation.outputs.survived  || '0' }}
+          CPP_TOTAL:       ${{ needs.cpp_mutation.outputs.total     || '0' }}
+          CPP_SCORE:       ${{ needs.cpp_mutation.outputs.score     || '0' }}
+          GH_REPO:         ${{ github.repository }}
+          GH_BRANCH:       ${{ github.ref_name }}
+          GH_SHA:          ${{ github.sha }}
+          GH_RUN_ID:       ${{ github.run_id }}
+        run: |
+          mkdir -p reports
+          python3 - <<'PY'
+          import os, html, time
+          from pathlib import Path
+
+          def e(v, cast=int):
+              try: return cast(os.environ.get(v) or 0)
+              except: return cast(0)
+
+          # ── collect data ──────────────────────────────────────────────
+          data = {
+              "repo":   os.environ.get("GH_REPO", ""),
+              "branch": os.environ.get("GH_BRANCH", ""),
+              "sha":    os.environ.get("GH_SHA", "")[:8],
+              "run":    os.environ.get("GH_RUN_ID", ""),
+              "ts":     time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+              "unit": {
+                  "total": e("UT_TOTAL"), "passed": e("UT_PASSED"),
+                  "failed": e("UT_FAILED"), "errors": e("UT_ERRORS"),
+                  "skipped": e("UT_SKIPPED"),
+              },
+              "py":  { "killed": e("PY_KILLED"), "survived": e("PY_SURVIVED"),
+                       "timeout": e("PY_TIMEOUT"), "total": e("PY_TOTAL"),
+                       "score": e("PY_SCORE", float) },
+              "c":   { "files": e("C_FILES"), "cp": e("C_COMPILE_PASS"),
+                       "cf": e("C_COMPILE_FAIL"), "rp": e("C_RUN_PASS"), "rf": e("C_RUN_FAIL"),
+                       "killed": e("C_KILLED"), "survived": e("C_SURVIVED"),
+                       "total": e("C_TOTAL"), "score": e("C_SCORE", float) },
+              "cpp": { "files": e("CPP_FILES"), "cp": e("CPP_COMPILE_PASS"),
+                       "cf": e("CPP_COMPILE_FAIL"), "rp": e("CPP_RUN_PASS"), "rf": e("CPP_RUN_FAIL"),
+                       "killed": e("CPP_KILLED"), "survived": e("CPP_SURVIVED"),
+                       "total": e("CPP_TOTAL"), "score": e("CPP_SCORE", float) },
+          }
+
+          # ── helpers ───────────────────────────────────────────────────
+          def score_color(s):
+              if s >= 80: return "#22863a"
+              if s >= 50: return "#b08800"
+              return "#cb2431"
+
+          def bar(pct, color):
+              return (f'<div style="background:#e1e4e8;border-radius:4px;height:10px;margin:4px 0">'
+                      f'<div style="width:{min(pct,100):.1f}%;background:{color};height:10px;border-radius:4px"></div></div>')
+
+          def stat(label, value, color="#24292e"):
+              return (f'<div style="background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;'
+                      f'padding:14px 18px;text-align:center">'
+                      f'<div style="font-size:11px;color:#57606a;margin-bottom:4px">{label}</div>'
+                      f'<div style="font-size:26px;font-weight:600;color:{color}">{value}</div></div>')
+
+          def section(title):
+              return (f'<h2 style="font-size:15px;font-weight:600;color:#24292e;'
+                      f'border-bottom:1px solid #d0d7de;padding-bottom:6px;margin:28px 0 14px">{title}</h2>')
+
+          def mut_section(lang, d):
+              sc = d["score"]; color = score_color(sc)
+              killed_pct = (d["killed"] / d["total"] * 100) if d["total"] else 0
+              surv_pct   = (d["survived"] / d["total"] * 100) if d["total"] else 0
+              return f"""
+          <div style="background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;padding:16px 20px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <span style="font-weight:600;font-size:14px">{lang}</span>
+              <span style="font-size:22px;font-weight:700;color:{color}">{sc}%</span>
+            </div>
+            {bar(killed_pct, "#22863a")}
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">
+              <div style="text-align:center"><div style="font-size:10px;color:#57606a">Total</div>
+                <div style="font-size:18px;font-weight:600">{d["total"]}</div></div>
+              <div style="text-align:center"><div style="font-size:10px;color:#57606a">Killed ✓</div>
+                <div style="font-size:18px;font-weight:600;color:#22863a">{d["killed"]}</div></div>
+              <div style="text-align:center"><div style="font-size:10px;color:#57606a">Survived ✗</div>
+                <div style="font-size:18px;font-weight:600;color:#cb2431">{d["survived"]}</div></div>
+              <div style="text-align:center"><div style="font-size:10px;color:#57606a">Timeout</div>
+                <div style="font-size:18px;font-weight:600;color:#b08800">{d.get("timeout",0)}</div></div>
+            </div>
+          </div>"""
+
+          # ── collect killed/survived diffs ────────────────────────────
+          def collect_diffs(base_dir, ext="*.diff"):
+              diffs = []
+              p = Path(base_dir)
+              if p.exists():
+                  for f in sorted(p.rglob(ext)):
+                      diffs.append((f.stem, f.read_text(errors="ignore")))
+              return diffs
+
+          py_diffs  = collect_diffs("downloaded/mutation-test-results/mutants")
+          c_diffs   = collect_diffs("downloaded/c-mutation-results/c-mutants")
+          cpp_diffs = collect_diffs("downloaded/cpp-mutation-results/cpp-mutants")
+
+          def diff_block(diffs, lang):
+              if not diffs:
+                  return f'<p style="color:#57606a;font-size:13px">No surviving {lang} mutants — all killed ✓</p>'
+              rows = ""
+              for name, content in diffs:
+                  rows += (f'<details style="margin:6px 0;border:1px solid #d0d7de;border-radius:6px">'
+                           f'<summary style="cursor:pointer;padding:8px 12px;font-size:13px;'
+                           f'font-weight:500;background:#f6f8fa;border-radius:6px">{html.escape(name)}</summary>'
+                           f'<pre style="margin:0;padding:14px;font-size:12px;background:#0d1117;color:#c9d1d9;'
+                           f'overflow-x:auto;border-radius:0 0 6px 6px">{html.escape(content)}</pre></details>')
+              return rows
+
+          # ── also grab mutmut run log ──────────────────────────────────
+          py_log = ""
+          log_path = Path("downloaded/mutation-test-results/mutmut-run.log")
+          if log_path.exists():
+              py_log = log_path.read_text(errors="ignore")[-6000:]  # last 6k chars
+
+          # ── unit test pass rate ───────────────────────────────────────
+          u = data["unit"]
+          unit_pct = (u["passed"] / u["total"] * 100) if u["total"] else 0
+          unit_color = score_color(unit_pct)
+
+          # ── overall combined score (all languages) ────────────────────
+          total_killed   = data["py"]["killed"]  + data["c"]["killed"]  + data["cpp"]["killed"]
+          total_mutants  = data["py"]["total"]   + data["c"]["total"]   + data["cpp"]["total"]
+          total_survived = data["py"]["survived"] + data["c"]["survived"] + data["cpp"]["survived"]
+          overall_score  = round(total_killed / total_mutants * 100, 2) if total_mutants else 0.0
+          overall_color  = score_color(overall_score)
+
+          # ── HTML ──────────────────────────────────────────────────────
+          html_out = f"""<!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>CI Mutation Report — {html.escape(data["repo"])}</title>
+            <style>
+              *, *::before, *::after {{ box-sizing: border-box; }}
+              body {{ font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+                      margin: 0; padding: 0; background: #fff; color: #24292e; }}
+              .header {{ background: #24292e; color: #fff; padding: 18px 32px; }}
+              .header h1 {{ margin: 0; font-size: 17px; font-weight: 600; }}
+              .header p  {{ margin: 4px 0 0; font-size: 12px; color: #8b949e; }}
+              .body  {{ max-width: 900px; margin: 0 auto; padding: 24px 32px 48px; }}
+              .grid4 {{ display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }}
+              .grid3 {{ display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }}
+              @media(max-width:600px) {{ .grid4,.grid3 {{ grid-template-columns:repeat(2,1fr); }} }}
+            </style>
+          </head>
+          <body>
+          <div class="header">
+            <h1>CI Mutation Testing Report</h1>
+            <p>{html.escape(data["repo"])} &nbsp;·&nbsp; branch: {html.escape(data["branch"])}
+               &nbsp;·&nbsp; {html.escape(data["sha"])} &nbsp;·&nbsp; run #{html.escape(data["run"])}
+               &nbsp;·&nbsp; {data["ts"]}</p>
+          </div>
+          <div class="body">
+
+          {section("Overall Mutation Score (all languages)")}
+          <div style="background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;padding:20px 24px;margin-bottom:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:14px;color:#57606a">Python + C + C++ combined</span>
+              <span style="font-size:32px;font-weight:700;color:{overall_color}">{overall_score}%</span>
+            </div>
+            {bar(overall_score, overall_color)}
+            <div class="grid3" style="margin-top:12px">
+              {stat("Total Mutants", total_mutants)}
+              {stat("Killed ✓", total_killed, "#22863a")}
+              {stat("Survived ✗", total_survived, "#cb2431")}
+            </div>
+          </div>
+
+          {section("Unit Tests (Python)")}
+          <div class="grid4">
+            {stat("Total", u["total"])}
+            {stat("Passed ✓", u["passed"], "#22863a")}
+            {stat("Failed ✗", u["failed"], "#cb2431")}
+            {stat("Skipped", u["skipped"], "#b08800")}
+          </div>
+          {bar(unit_pct, unit_color)}
+
+          {section("Mutation Testing by Language")}
+          {mut_section("Python", data["py"])}
+          {mut_section("C", data["c"])}
+          {mut_section("C++", data["cpp"])}
+
+          {section("C Compile & Run")}
+          <div class="grid4">
+            {stat("Files", data["c"]["files"])}
+            {stat("Compile Pass", data["c"]["cp"], "#22863a")}
+            {stat("Compile Fail", data["c"]["cf"], "#cb2431")}
+            {stat("Run Pass / Fail", f'{data["c"]["rp"]} / {data["c"]["rf"]}')}
+          </div>
+
+          {section("C++ Compile & Run")}
+          <div class="grid4">
+            {stat("Files", data["cpp"]["files"])}
+            {stat("Compile Pass", data["cpp"]["cp"], "#22863a")}
+            {stat("Compile Fail", data["cpp"]["cf"], "#cb2431")}
+            {stat("Run Pass / Fail", f'{data["cpp"]["rp"]} / {data["cpp"]["rf"]}')}
+          </div>
+
+          {section("Killed Mutants — Python (survived diffs)")}
+          {diff_block(py_diffs, "Python")}
+
+          {section("Killed Mutants — C (survived diffs)")}
+          {diff_block(c_diffs, "C")}
+
+          {section("Killed Mutants — C++ (survived diffs)")}
+          {diff_block(cpp_diffs, "C++")}
+
+          {section("Python mutmut Run Log (last 6 000 chars)")}
+          <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;
+                      font-size:12px;overflow-x:auto;white-space:pre-wrap">{html.escape(py_log) if py_log else "No log captured."}</pre>
+
+          </div>
+          </body>
+          </html>"""
+
+          Path("reports/combined-report.html").write_text(html_out, encoding="utf-8")
+          print("Combined report written.")
+          PY
+
+      - name: Upload combined report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-report
+          path: reports/combined-report.html
+          if-no-files-found: error
+
+      # ── Grafana / Prometheus push is commented out ──────────────────
+      # Uncomment and set secrets (PUSHGATEWAY_URL) to re-enable.
+      #
+      # - name: Push to Grafana + Prometheus push-gateway
+      #   env:
+      #     GRAFANA_URL:      "http://127.0.0.1:3000"
+      #     GRAFANA_USER:     "admin"
+      #     GRAFANA_PASSWORD: "admin"
+      #     PUSHGATEWAY_URL:  ${{ secrets.PUSHGATEWAY_URL }}
+      #   run: |
+      #     pip install requests
+      #     python3 - <<'PY'
+      #     import json, os, time, requests
+      #     from pathlib import Path
+      #     # ... restore grafana annotation + prometheus push logic here
+      #     PY
