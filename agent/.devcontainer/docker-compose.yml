@@ -10,8 +10,6 @@
 # Run the infra stack first:
 #   docker compose up -d   (from the project root)
 # ─────────────────────────────────────────────────────────────────────────────
-version: '3.8'
-
 networks:
   mutation-net:
     external: true          # created by the root docker-compose.yml

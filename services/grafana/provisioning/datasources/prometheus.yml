@@ -3,7 +3,7 @@ apiVersion: 1
 # ─────────────────────────────────────────────────────────────────────────────
 # Grafana auto-provisioned datasource
 # Loaded on container start from the volume mount:
-#   ./grafana/provisioning:/etc/grafana/provisioning
+#   ./services/grafana/provisioning:/etc/grafana/provisioning
 #
 # Prometheus is reachable at http://prometheus:9090 because all containers
 # share the "mutation-net" bridge network defined in docker-compose.yml.

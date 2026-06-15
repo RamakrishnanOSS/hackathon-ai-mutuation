@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # ── Application source ────────────────────────────────────────
 WORKDIR /app
-COPY services/ ./services/
+COPY services/*.py ./services/
 
 # ── Runtime ───────────────────────────────────────────────────
 EXPOSE 8000
