@@ -1050,7 +1050,6 @@ export function activate(context: vscode.ExtensionContext) {
     const config = loadYamlConfig(wsDir || "");
     const promUrl = (await vscode.env.asExternalUri(vscode.Uri.parse(config.prometheusUrl))).toString();
     const grafUrl = (await vscode.env.asExternalUri(vscode.Uri.parse(config.grafanaUrl))).toString();
-    const promOrigin = new URL(promUrl).origin;
     const grafOrigin = new URL(grafUrl).origin;
 
     const panel = vscode.window.createWebviewPanel(
@@ -1068,9 +1067,58 @@ export function activate(context: vscode.ExtensionContext) {
       `img-src ${panel.webview.cspSource} https: data:`,
       `style-src ${panel.webview.cspSource} 'unsafe-inline'`,
       `script-src ${panel.webview.cspSource} 'unsafe-inline'`,
-      `connect-src ${promOrigin}`,
       `frame-src ${grafOrigin}`
     ].join('; ');
+
+    const parseMetricValue = (metricsText: string, metricName: string): number | null => {
+      const match = metricsText.match(new RegExp(`${metricName}\\s+([0-9.]+)`));
+      if (!match) {
+        return null;
+      }
+      return Math.round(parseFloat(match[1]));
+    };
+
+    const publishMetricsSnapshot = async () => {
+      try {
+        const response = await fetch(`${promUrl}/metrics?ts=${Date.now()}`);
+        if (!response.ok) {
+          throw new Error(`Prometheus returned ${response.status}`);
+        }
+
+        const metricsText = await response.text();
+        panel.webview.postMessage({
+          type: 'mutation-metrics',
+          connected: true,
+          statusText: 'Prometheus metrics stream is responding.',
+          metrics: {
+            vulnScore: parseMetricValue(metricsText, 'mutation_vulnerability_score'),
+            activeDebt: parseMetricValue(metricsText, 'mutation_debt'),
+            generatedMutants: parseMetricValue(metricsText, 'mutations_generated_total'),
+            acceptedMutants: parseMetricValue(metricsText, 'mutations_accepted_total'),
+            baselineRuns: parseMetricValue(metricsText, 'baseline_runs_total'),
+            aiGenerated: parseMetricValue(metricsText, 'ai_tests_generated_total'),
+            sandboxTestsRun: parseMetricValue(metricsText, 'sandbox_tests_run_total'),
+            sandboxTestsPassed: parseMetricValue(metricsText, 'sandbox_tests_passed_total'),
+            sandboxTestsFailed: parseMetricValue(metricsText, 'sandbox_tests_failed_total')
+          }
+        });
+      } catch (error) {
+        panel.webview.postMessage({
+          type: 'mutation-metrics',
+          connected: false,
+          statusText: 'Unable to reach Prometheus from the extension host. Check the container stack and published ports.'
+        });
+        outputChannel.appendLine(`Prometheus dashboard poll failed: ${error}`);
+      }
+    };
+
+    const dashboardRefreshTimer = setInterval(() => {
+      void publishMetricsSnapshot();
+    }, 2000);
+
+    panel.onDidDispose(() => {
+      clearInterval(dashboardRefreshTimer);
+    });
 
     // Dynamic, interactive SVG Live charts dashboard inside VS Code webview. Includes live connection to local Prometheus stats on :8000!
     panel.webview.html = `<!DOCTYPE html>
@@ -1120,9 +1168,20 @@ export function activate(context: vscode.ExtensionContext) {
     .card h3 {
       margin-top: 0;
       color: var(--vscode-editor-foreground);
-      font-size: 0.85em;
       border-bottom: 1px dashed var(--vscode-widget-border);
       padding-bottom: 4px;
+
+      const valueNodes = {
+        vulnScore: document.getElementById('vulnScore'),
+        activeDebt: document.getElementById('activeDebt'),
+        generatedMutants: document.getElementById('generatedMutants'),
+        acceptedMutants: document.getElementById('acceptedMutants'),
+        baselineRuns: document.getElementById('baselineRuns'),
+        aiGenerated: document.getElementById('aiGenerated'),
+        sandboxTestsRun: document.getElementById('sandboxTestsRun'),
+        sandboxTestsPassed: document.getElementById('sandboxTestsPassed'),
+        sandboxTestsFailed: document.getElementById('sandboxTestsFailed')
+      };
       margin-bottom: 6px;
     }
     .metric {
@@ -1130,62 +1189,58 @@ export function activate(context: vscode.ExtensionContext) {
       font-weight: bold;
       text-align: center;
       margin: 6px 0;
-      color: var(--vscode-statusBarItem-remoteBackground) || var(--vscode-textLink-foreground);
-    }
-    .status-badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-size: 0.8em;
-      font-weight: bold;
-      text-transform: uppercase;
-      background: #4caf50;
-      color: white;
-    }
-    .desc {
-      text-align: center;
-      font-size: 0.75em;
-      opacity: 0.8;
-      margin: 0;
-    }
-    .connection-banner {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 12px 0 0;
-      font-size: 0.85em;
-      opacity: 0.9;
-    }
-    iframe {
-      width: 100%;
-      height: 380px;
-      border: none;
-      background: white;
-      border-radius: 6px;
-      margin-top: 12px;
-    }
-  </style>
-</head>
-<body>
-  <h1>🧬 Mutation Live Observability Board</h1>
-  <p style="font-size: 0.9em; margin-bottom: 12px; opacity: 0.9;">Continuous mutation testing platform performance indicators synced with Grafana OTel daemon.</p>
-  <div class="connection-banner"><span class="status-badge" id="connectionStatus">CONNECTING</span><span id="connectionStatusText">Checking Prometheus and Grafana connectivity...</span></div>
+      const applyMetricsSnapshot = (metrics) => {
+        if (metrics.vulnScore !== null && metrics.vulnScore !== undefined) {
+          valueNodes.vulnScore.innerText = metrics.vulnScore + '%';
+        }
+        if (metrics.activeDebt !== null && metrics.activeDebt !== undefined) {
+          valueNodes.activeDebt.innerText = metrics.activeDebt + ' Mutants';
+          valueNodes.activeDebt.style.color = metrics.activeDebt > 0 ? '#ff9800' : '#4caf50';
+        }
+        if (metrics.generatedMutants !== null && metrics.generatedMutants !== undefined) {
+          valueNodes.generatedMutants.innerText = metrics.generatedMutants;
+        }
+        if (metrics.acceptedMutants !== null && metrics.acceptedMutants !== undefined) {
+          valueNodes.acceptedMutants.innerText = metrics.acceptedMutants;
+        }
+        if (metrics.baselineRuns !== null && metrics.baselineRuns !== undefined) {
+          valueNodes.baselineRuns.innerText = metrics.baselineRuns;
+        }
+        if (metrics.aiGenerated !== null && metrics.aiGenerated !== undefined) {
+          valueNodes.aiGenerated.innerText = metrics.aiGenerated;
+        }
+        if (metrics.sandboxTestsRun !== null && metrics.sandboxTestsRun !== undefined) {
+          valueNodes.sandboxTestsRun.innerText = metrics.sandboxTestsRun;
+        }
+        if (metrics.sandboxTestsPassed !== null && metrics.sandboxTestsPassed !== undefined) {
+          valueNodes.sandboxTestsPassed.innerText = metrics.sandboxTestsPassed;
+        }
+        if (metrics.sandboxTestsFailed !== null && metrics.sandboxTestsFailed !== undefined) {
+          valueNodes.sandboxTestsFailed.innerText = metrics.sandboxTestsFailed;
+        }
+      };
 
-  <div class="section-title">🛡️ Platform Security & Quality Risk Indicators</div>
-  <div class="grid">
-    <div class="card">
-      <h3>Vulnerability Protection</h3>
-      <div class="metric" id="vulnScore">84.6%</div>
-      <p class="desc">Goal: >85% mutant protection.</p>
+      window.addEventListener('message', event => {
+        const message = event.data;
+        if (!message || message.type !== 'mutation-metrics') {
+          return;
+        }
+
+        if (message.connected) {
+          setConnectionState('CONNECTED', message.statusText || 'Prometheus metrics stream is responding.', '#4caf50');
+        } else {
+          setConnectionState('DISCONNECTED', message.statusText || 'Unable to reach Prometheus from the extension host. Check the container stack and published ports.', '#f44336');
+        }
+
+        if (message.metrics) {
+          applyMetricsSnapshot(message.metrics);
+        }
+      });
     </div>
 
     <div class="card">
-      <h3>Active Mutation Debt</h3>
-      <div class="metric" id="activeDebt" style="color: #ff9800;">2 Mutants</div>
-      <p class="desc">Unprotected surviving mutants >7d.</p>
-    </div>
 
-    <div class="card">
+      void publishMetricsSnapshot();
       <h3>Total Generated Mutants</h3>
       <div class="metric" id="generatedMutants" style="color: #2196f3;">0</div>
       <p class="desc">Candidates compiled via AST trees.</p>
