@@ -13,6 +13,7 @@ let lastBaselineResult: { tests: any[]; durationMs?: number } = { tests: [] };
 let lastRunResults: any[] = [];
 let lastSelectedSourceFiles: string[] = [];
 let mutationDiagnostics: vscode.DiagnosticCollection;
+const mutationAnalysisTimers = new Map<string, NodeJS.Timeout>();
 
 const mutationDecorationTypes = {
   high: vscode.window.createTextEditorDecorationType({
@@ -178,6 +179,93 @@ function upsertMutants(newMutants: any[]): void {
   const newIds = new Set(newMutants.map(mutant => mutant.mutant_id || mutant.mutantId).filter(Boolean));
   activeMutantsList = activeMutantsList.filter(mutant => !newIds.has(mutant.mutant_id || mutant.mutantId));
   activeMutantsList = [...activeMutantsList, ...newMutants];
+}
+
+function scheduleMutationAnalysis(editor: vscode.TextEditor, source: 'open' | 'save' | 'manual' = 'manual'): void {
+  if (!editor || editor.document.isUntitled || editor.document.uri.scheme !== 'file') {
+    return;
+  }
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) {
+    return;
+  }
+
+  const relativePath = path.relative(workspaceRoot, editor.document.uri.fsPath).replace(/\\/g, '/');
+  if (!relativePath || relativePath.startsWith('..')) {
+    return;
+  }
+
+  const timerKey = editor.document.uri.toString();
+  const existingTimer = mutationAnalysisTimers.get(timerKey);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  const delayMs = source === 'save' ? 150 : 250;
+  const timer = setTimeout(() => {
+    mutationAnalysisTimers.delete(timerKey);
+    void runMutationAnalysisForEditor(editor, { announce: source === 'manual' });
+  }, delayMs);
+
+  mutationAnalysisTimers.set(timerKey, timer);
+}
+
+async function runMutationAnalysisForEditor(editor: vscode.TextEditor, options: { announce: boolean }): Promise<void> {
+  const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!wsDir || !editor || editor.document.isUntitled || editor.document.uri.scheme !== 'file') {
+    return;
+  }
+
+  const relativePath = path.relative(wsDir, editor.document.uri.fsPath).replace(/\\/g, '/');
+  if (!relativePath || relativePath.startsWith('..')) {
+    return;
+  }
+
+  const activeYaml = loadYamlConfig(wsDir);
+  const config = vscode.workspace.getConfiguration('mutationTesting');
+  const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
+  const aiProvider = config.get<string>('aiProvider', 'mock');
+  const selectedOperators = [
+    'relational_operator_replacement',
+    'arithmetic_substitution',
+    'boundary_value_tweak',
+    'boolean_inversion',
+    'return_value_stripping'
+  ];
+
+  if (options.announce) {
+    statusBarItem.text = '🧬 Analyzing active file...';
+    outputChannel.show(true);
+    outputChannel.appendLine('=================================================');
+    outputChannel.appendLine(`🔎 Analyzing active editor file: ${relativePath}`);
+    outputChannel.appendLine('=================================================');
+  }
+
+  try {
+    const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, {
+      workspaceDir: wsDir,
+      targetFiles: [relativePath],
+      operators: selectedOperators,
+      aiEngineProvider: aiProvider
+    });
+
+    const mutantsFound = resp && resp.mutants ? resp.mutants : [];
+    const normalizedMutants = mutantsFound.map((m: any) => ({ ...m, status: 'PENDING', accepted: true }));
+    upsertMutants(normalizedMutants);
+    treeDataProvider.refresh({ mutants: activeMutantsList });
+    refreshMutationAnnotations();
+
+    if (options.announce) {
+      outputChannel.appendLine(`✅ In-editor mutation analysis completed: ${normalizedMutants.length} candidate(s) found.`);
+      vscode.window.showInformationMessage(`Mutation analysis completed for ${path.basename(relativePath)}: ${normalizedMutants.length} candidate(s) highlighted.`);
+    }
+  } catch (err: any) {
+    if (options.announce) {
+      outputChannel.appendLine(`❌ Active file analysis failed: ${err.message}`);
+      vscode.window.showErrorMessage(`Mutation analysis failed: ${err.message}`);
+    }
+  }
 }
 
 function loadYamlConfig(wsDir: string): any {
@@ -677,61 +765,11 @@ export function activate(context: vscode.ExtensionContext) {
   // ══════════════════════════════════════════════════════════════
   let analyzeCurrentEditor = vscode.commands.registerCommand('mutation.analyzeCurrentEditor', async () => {
     const editor = vscode.window.activeTextEditor;
-    const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-
-    if (!wsDir) {
-      vscode.window.showErrorMessage('Open a workspace folder to analyze the current file.');
-      return;
-    }
     if (!editor || editor.document.isUntitled || editor.document.uri.scheme !== 'file') {
       vscode.window.showWarningMessage('Open a saved file in the editor to run mutation analysis.');
       return;
     }
-
-    const relativePath = path.relative(wsDir, editor.document.uri.fsPath).replace(/\\/g, '/');
-    if (!relativePath || relativePath.startsWith('..')) {
-      vscode.window.showWarningMessage('The active file is not inside the current workspace folder.');
-      return;
-    }
-
-    const activeYaml = loadYamlConfig(wsDir);
-    const config = vscode.workspace.getConfiguration('mutationTesting');
-    const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://127.0.0.1:8000');
-    const aiProvider = config.get<string>('aiProvider', 'mock');
-    const selectedOperators = [
-      'relational_operator_replacement',
-      'arithmetic_substitution',
-      'boundary_value_tweak',
-      'boolean_inversion',
-      'return_value_stripping'
-    ];
-
-    statusBarItem.text = '🧬 Analyzing active file...';
-    outputChannel.show(true);
-    outputChannel.appendLine('=================================================');
-    outputChannel.appendLine(`🔎 Analyzing active editor file: ${relativePath}`);
-    outputChannel.appendLine('=================================================');
-
-    try {
-      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, {
-        workspaceDir: wsDir,
-        targetFiles: [relativePath],
-        operators: selectedOperators,
-        aiEngineProvider: aiProvider
-      });
-
-      const mutantsFound = resp && resp.mutants ? resp.mutants : [];
-      const normalizedMutants = mutantsFound.map((m: any) => ({ ...m, status: 'PENDING', accepted: true }));
-      upsertMutants(normalizedMutants);
-      treeDataProvider.refresh({ mutants: activeMutantsList });
-      refreshMutationAnnotations();
-
-      outputChannel.appendLine(`✅ In-editor mutation analysis completed: ${normalizedMutants.length} candidate(s) found.`);
-      vscode.window.showInformationMessage(`Mutation analysis completed for ${path.basename(relativePath)}: ${normalizedMutants.length} candidate(s) highlighted.`);
-    } catch (err: any) {
-      outputChannel.appendLine(`❌ Active file analysis failed: ${err.message}`);
-      vscode.window.showErrorMessage(`Mutation analysis failed: ${err.message}`);
-    }
+    await runMutationAnalysisForEditor(editor, { announce: true });
   });
 
   let suggestFixesCurrentEditor = vscode.commands.registerCommand('mutation.suggestFixesCurrentEditor', async () => {
@@ -1356,6 +1394,20 @@ export function activate(context: vscode.ExtensionContext) {
     refreshMutationAnnotations();
   });
 
+  const autoAnalyzeOnOpen = vscode.workspace.onDidOpenTextDocument(doc => {
+    const editor = vscode.window.visibleTextEditors.find(item => item.document.uri.toString() === doc.uri.toString());
+    if (editor) {
+      scheduleMutationAnalysis(editor, 'open');
+    }
+  });
+
+  const autoAnalyzeOnSave = vscode.workspace.onDidSaveTextDocument(doc => {
+    const editor = vscode.window.visibleTextEditors.find(item => item.document.uri.toString() === doc.uri.toString());
+    if (editor) {
+      scheduleMutationAnalysis(editor, 'save');
+    }
+  });
+
   context.subscriptions.push(
     runBaseline,
     generate,
@@ -1375,6 +1427,8 @@ export function activate(context: vscode.ExtensionContext) {
     generateReport,
     mutationCodeActionProvider,
     activeEditorRefresh,
+    autoAnalyzeOnOpen,
+    autoAnalyzeOnSave,
     mutationDiagnostics,
     mutationDecorationTypes.high,
     mutationDecorationTypes.medium,
