@@ -15,8 +15,8 @@ let lastSelectedSourceFiles: string[] = [];
 
 function loadYamlConfig(wsDir: string): any {
   const defaultConfig = {
-    coreUrl: 'http://127.0.0.1:8000',
-    grafanaUrl: 'http://localhost:3000',
+    coreUrl: 'http://core-service:8000',
+    grafanaUrl: 'http://grafana:3000',
     defaultSourceFile: 'agent/hello.py',
     defaultTestFile: 'agent/test_hello.py',
     testRunner: 'pytest'
