@@ -43,8 +43,9 @@
   //   0. Strips Windows CRLF line-endings from all .sh scripts (safe no-op on LF files).
   //   1. (Re)builds the extension .vsix – uses Dockerfile node_modules cache
   //      so it's fast; falls back to npm ci if cache is missing.
-  //   2. Starts the FastAPI core mutation service on port 8000.
-  "postStartCommand": "find /workspace/.devcontainer -name '*.sh' -exec sed -i 's/\r$//' {} + && bash /workspace/.devcontainer/build-extension.sh && bash /workspace/.devcontainer/start-core-service.sh",
+  // Note: the core mutation service, Prometheus, and Grafana are no longer started here.
+  //       Run `docker compose up -d` from the project root to start the infra stack.
+  "postStartCommand": "find /workspace/.devcontainer -name '*.sh' -exec sed -i 's/\r$//' {} + && bash /workspace/.devcontainer/build-extension.sh",
 
   // Runs every time VS Code attaches to the container:
   //   • Strips CRLF (defensive – postStartCommand may still be running on first attach),
