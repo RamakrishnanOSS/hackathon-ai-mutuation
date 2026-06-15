@@ -1041,13 +1041,13 @@ export function activate(context: vscode.ExtensionContext) {
   // ══════════════════════════════════════════════════════════════
   // Command 6: Open Live Grafana Dashboard in Editor area
   // ══════════════════════════════════════════════════════════════
-  let openDashboard = vscode.commands.registerCommand('mutation.openDashboard', () => {
+  let openDashboard = vscode.commands.registerCommand('mutation.openDashboard', async () => {
     outputChannel.appendLine("Opening live dashboard view panel...");
 
     const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const config = loadYamlConfig(wsDir || "");
-    const promUrl = config.coreUrl;
-    const grafUrl = config.grafanaUrl;
+    const promUrl = (await vscode.env.asExternalUri(vscode.Uri.parse('http://localhost:9090'))).toString();
+    const grafUrl = (await vscode.env.asExternalUri(vscode.Uri.parse('http://localhost:3000'))).toString();
 
     const panel = vscode.window.createWebviewPanel(
       'mutationDashboard',
