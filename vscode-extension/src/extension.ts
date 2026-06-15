@@ -1048,9 +1048,20 @@ export function activate(context: vscode.ExtensionContext) {
 
     const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const config = loadYamlConfig(wsDir || "");
-    const promUrl = (await vscode.env.asExternalUri(vscode.Uri.parse(config.prometheusUrl))).toString();
     const grafUrl = (await vscode.env.asExternalUri(vscode.Uri.parse(config.grafanaUrl))).toString();
     const grafOrigin = new URL(grafUrl).origin;
+    const hostPromUrl = (() => {
+      try {
+        const parsed = new URL(config.prometheusUrl);
+        if ((parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && vscode.env.remoteName) {
+          parsed.hostname = 'prometheus';
+          return parsed.toString();
+        }
+        return parsed.toString();
+      } catch {
+        return 'http://prometheus:9090';
+      }
+    })();
 
     const panel = vscode.window.createWebviewPanel(
       'mutationDashboard',
@@ -1080,7 +1091,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const publishMetricsSnapshot = async () => {
       try {
-        const response = await fetch(`${promUrl}/metrics?ts=${Date.now()}`);
+        const response = await fetch(`${hostPromUrl}/metrics?ts=${Date.now()}`);
         if (!response.ok) {
           throw new Error(`Prometheus returned ${response.status}`);
         }
@@ -1296,7 +1307,6 @@ export function activate(context: vscode.ExtensionContext) {
   </div>
 
   <script>
-    // Live loopback metric checker parsing the Otel /metrics pipeline
     const connectionStatus = document.getElementById('connectionStatus');
     const connectionStatusText = document.getElementById('connectionStatusText');
 
@@ -1306,59 +1316,6 @@ export function activate(context: vscode.ExtensionContext) {
       connectionStatusText.innerText = label;
     };
 
-    const refreshMetrics = () => {
-      fetch('${promUrl}/metrics?ts=' + Date.now(), { cache: 'no-store' })
-        .then(res => res.text())
-        .then(text => {
-          setConnectionState('CONNECTED', 'Prometheus metrics stream is responding.', '#4caf50');
-          // Parse OpenTelemetry gauges
-          const vulnMatch = text.match(/mutation_vulnerability_score\\s+([0-9.]+)/);
-          if (vulnMatch) {
-            document.getElementById('vulnScore').innerText = vulnMatch[1] + '%';
-          }
-          const debtMatch = text.match(/mutation_debt\\s+([0-9.]+)/);
-          if (debtMatch) {
-            const count = Math.round(parseFloat(debtMatch[1]));
-            document.getElementById('activeDebt').innerText = count + ' Mutants';
-            document.getElementById('activeDebt').style.color = count > 0 ? '#ff9800' : '#4caf50';
-          }
-          const genMatch = text.match(/mutations_generated_total\\s+([0-9.]+)/);
-          if (genMatch) {
-            document.getElementById('generatedMutants').innerText = Math.round(parseFloat(genMatch[1]));
-          }
-          const accMatch = text.match(/mutations_accepted_total\\s+([0-9.]+)/);
-          if (accMatch) {
-            document.getElementById('acceptedMutants').innerText = Math.round(parseFloat(accMatch[1]));
-          }
-          const baseMatch = text.match(/baseline_runs_total\\s+([0-9.]+)/);
-          if (baseMatch) {
-            document.getElementById('baselineRuns').innerText = Math.round(parseFloat(baseMatch[1]));
-          }
-          const aiMatch = text.match(/ai_tests_generated_total\\s+([0-9.]+)/);
-          if (aiMatch) {
-            document.getElementById('aiGenerated').innerText = Math.round(parseFloat(aiMatch[1]));
-          }
-          const sRunMatch = text.match(/sandbox_tests_run_total\\s+([0-9.]+)/);
-          if (sRunMatch) {
-            document.getElementById('sandboxTestsRun').innerText = Math.round(parseFloat(sRunMatch[1]));
-          }
-          const sPassMatch = text.match(/sandbox_tests_passed_total\\s+([0-9.]+)/);
-          if (sPassMatch) {
-            document.getElementById('sandboxTestsPassed').innerText = Math.round(parseFloat(sPassMatch[1]));
-          }
-          const sFailMatch = text.match(/sandbox_tests_failed_total\\s+([0-9.]+)/);
-          if (sFailMatch) {
-            document.getElementById('sandboxTestsFailed').innerText = Math.round(parseFloat(sFailMatch[1]));
-          }
-        })
-        .catch(err => {
-          setConnectionState('DISCONNECTED', 'Unable to reach Prometheus or Grafana. Check the container stack and published ports.', '#f44336');
-          console.log('Otel Prom connection check...', err);
-        });
-    };
-
-    refreshMetrics();
-    setInterval(refreshMetrics, 2000);
   </script>
 </body>
 </html>`;
