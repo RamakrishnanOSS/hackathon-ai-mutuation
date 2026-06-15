@@ -1,8 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# AI Mutation Testing — Dev Container Compose
+# AI Mutation Testing — Dev Container Compose (agent workspace)
 #
-# Only the devcontainer service lives here. Core services (core-service,
-# prometheus, grafana) are managed by the root-level docker-compose.yml.
+# The devcontainer workspace is agent/ — the source directory consumed by
+# the mutation engine. Core services (core-service, prometheus, grafana)
+# are managed by the root-level docker-compose.yml.
 #
 # The devcontainer joins "mutation-net" (created by the root compose) so it
 # can reach core-service, prometheus, and grafana by service name.
@@ -20,10 +21,10 @@ services:
   # ── Dev container ──────────────────────────────────────────
   devcontainer:
     build:
-      context: ..                    # project root as build context
-      dockerfile: .devcontainer/Dockerfile
+      context: ../..                 # project root as build context
+      dockerfile: agent/.devcontainer/Dockerfile
     volumes:
-      - ..:/workspace:cached         # live-mount project source
+      - ..:/workspace:cached         # live-mount agent/ as /workspace
     networks:
       - mutation-net
     environment:

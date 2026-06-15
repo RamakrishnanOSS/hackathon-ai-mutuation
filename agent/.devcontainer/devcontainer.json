@@ -1,14 +1,16 @@
 // ────────────────────────────────────────────────────────────────
-// AI Mutation Testing — Dev Container Configuration
+// AI Mutation Testing — Dev Container Configuration (agent workspace)
+// Opens agent/ as the VS Code workspace root.
 // Python 3.11 + Node 20 + g++ are provided by the custom Dockerfile.
+//
+// Extension workflow:
+//   Build (host only, run once before opening the devcontainer, from repo root):
+//     bash vscode-extension-scripts/build-extension.sh
+//   The resulting .vsix is committed to .devcontainer/ and installed
+//   automatically on every attach via postAttachCommand.
+//
 // Lifecycle hooks:
-//   postStartCommand  – (re)builds the .vsix on EVERY container start,
-//                       then starts the FastAPI core service.
-//                       Uses Dockerfile-baked node_modules cache so the
-//                       first build is fast even without network access.
-//   postAttachCommand – waits for the .vsix to be ready, then installs it
-//                       into the running VS Code Server instance so the
-//                       mutation commands are immediately available.
+//   postAttachCommand – installs the pre-built .vsix into VS Code Server.
 // ────────────────────────────────────────────────────────────────
 {
   "name": "AI Mutation Testing",
@@ -39,17 +41,10 @@
 
   // ── Lifecycle hooks ──────────────────────────────────────────
 
-  // Runs on EVERY container start:
-  //   0. Strips Windows CRLF line-endings from all .sh scripts (safe no-op on LF files).
-  //   1. (Re)builds the extension .vsix – uses Dockerfile node_modules cache
-  //      so it's fast; falls back to npm ci if cache is missing.
-  // Note: the core mutation service, Prometheus, and Grafana are no longer started here.
-  //       Run `docker compose up -d` from the project root to start the infra stack.
-  "postStartCommand": "find /workspace/.devcontainer -name '*.sh' -exec sed -i 's/\r$//' {} + && bash /workspace/.devcontainer/build-extension.sh",
-
-  // Runs every time VS Code attaches to the container:
-  //   • Strips CRLF (defensive – postStartCommand may still be running on first attach),
-  //     waits for the .vsix, then installs it into VS Code.
+  // Runs every time VS Code attaches to the container.
+  // Strips CRLF from the install script (safe no-op on LF files), then
+  // extracts the pre-built .vsix from .devcontainer/ into VS Code Server.
+  // To rebuild the .vsix on the host: bash vscode-extension-scripts/build-extension.sh (from repo root)
   "postAttachCommand": "sed -i 's/\r$//' /workspace/.devcontainer/install-extension.sh && bash /workspace/.devcontainer/install-extension.sh",
 
   // ── Environment ────────────────────────────────────────────

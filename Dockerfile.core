@@ -24,7 +24,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # ── Application source ────────────────────────────────────────
 WORKDIR /app
 COPY services/ ./services/
-COPY agent/ ./agent/
 
 # ── Runtime ───────────────────────────────────────────────────
 EXPOSE 8000
