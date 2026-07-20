@@ -23,6 +23,33 @@ from ai_engine import AIEngine
 CPP_EXTENSIONS = [".cpp", ".cc", ".cxx", ".hpp", ".h", ".c"]
 
 
+def resolve_workspace_dir(requested_workspace_dir: Optional[str]) -> str:
+    """Resolve workspace directory for both host-run and Docker-run service modes."""
+    candidates: List[str] = []
+
+    if requested_workspace_dir:
+        candidates.append(requested_workspace_dir)
+
+    env_candidates = [
+        os.environ.get("MUTATION_WORKSPACE_DIR"),
+        os.environ.get("WORKSPACE_DIR"),
+        "/workspace",
+        "/repo",
+        "/app",
+    ]
+    candidates.extend([c for c in env_candidates if c])
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.exists(candidate):
+            if os.path.isdir(candidate):
+                return candidate
+
+    # Return requested path if nothing exists; callers may still emit meaningful file-not-found errors.
+    return requested_workspace_dir or ""
+
+
 def is_cpp_source(file_path: str) -> bool:
     return os.path.splitext(file_path)[1].lower() in CPP_EXTENSIONS
 
@@ -54,10 +81,19 @@ def ai_config_for_language(language: str) -> Dict[str, Any]:
     return APP_CONFIG.get("ai_engine_python", APP_CONFIG.get("ai_engine", {}))
 
 
-def build_ai_engine(language: str, provider_override: Optional[str], api_key: Optional[str]) -> AIEngine:
+def build_ai_engine(
+    language: str,
+    provider_override: Optional[str],
+    api_key: Optional[str],
+    provider_url: Optional[str] = None,
+) -> AIEngine:
     ai_cfg = ai_config_for_language(language)
-    provider = provider_override or ai_cfg.get("provider", "mock")
-    return AIEngine(provider=provider, api_key=api_key, config=ai_cfg)
+    if provider_url:
+        # Re-map runtime URL override to concrete provider host config.
+        ai_cfg = dict(ai_cfg)
+        ai_cfg["ollama_host"] = provider_url
+    provider = provider_override or ai_cfg.get("provider", "ollama")
+    return AIEngine(provider=provider, api_key=api_key, config=ai_cfg, provider_url=provider_url)
 
 def get_adapter_for_file(filePath: str):
     ext = os.path.splitext(filePath)[1].lower()
@@ -120,8 +156,69 @@ DATABASE = {
     "projects": {},
     "mutations_cache": {},   # mutant_id -> mutant dict
     "mutation_runs": {},     # run_id -> run status dict
+    "baseline_runs": {},     # baseline_run_id -> run status dict
     "active_acceptance": {}, # mutant_id -> "ACCEPTED" | "REJECTED" | "PENDING"
 }
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _append_run_log(
+    run_id: str,
+    level: str,
+    source: str,
+    message: str,
+    mutant_id: Optional[str] = None,
+    test_name: Optional[str] = None,
+    framework: Optional[str] = None,
+    synthetic: bool = False,
+):
+    run_state = DATABASE["mutation_runs"].get(run_id)
+    if not run_state:
+        return
+
+    logs = run_state.setdefault("logs", [])
+    logs.append(
+        {
+            "timestamp": _utc_now_iso(),
+            "level": level,
+            "source": source,
+            "message": message,
+            "mutantId": mutant_id,
+            "testName": test_name,
+            "framework": framework,
+            "synthetic": synthetic,
+        }
+    )
+
+    # Keep bounded in-memory log history for each run.
+    if len(logs) > 1000:
+        del logs[:-1000]
+
+
+def _set_run_progress(run_id: str, **updates: Any):
+    run_state = DATABASE["mutation_runs"].get(run_id)
+    if not run_state:
+        return
+
+    progress = run_state.setdefault(
+        "progress",
+        {
+            "totalMutants": 0,
+            "completedMutants": 0,
+            "currentMutantId": None,
+            "currentMutantFile": None,
+            "currentFramework": None,
+            "currentTestName": None,
+            "phase": "queued",
+        },
+    )
+    progress.update(updates)
+    run_state["updatedAt"] = _utc_now_iso()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -133,63 +230,37 @@ class BaselineRequest(BaseModel):
     testRunner: str = "pytest"
 
 
-class MutationGenerateRequest(BaseModel):
-    workspaceDir: str
-    targetFiles: List[str]
-    operators: List[str] = [
-        "relational_operator_replacement",
-        "arithmetic_substitution",
-        "boundary_value_tweak",
-        "boolean_inversion",
-        "return_value_stripping"
-    ]
-    aiEngineProvider: Optional[str] = None
-    aiApiKey: Optional[str] = None
+def _set_baseline_progress(run_id: str, **updates: Any):
+    run_state = DATABASE["baseline_runs"].get(run_id)
+    if not run_state:
+        return
+
+    progress = run_state.setdefault(
+        "progress",
+        {
+            "phase": "queued",
+            "totalSuites": 0,
+            "completedSuites": 0,
+            "currentFramework": None,
+            "currentTarget": None,
+            "message": "Queued",
+        },
+    )
+    progress.update(updates)
+    run_state["updatedAt"] = _utc_now_iso()
 
 
-class TestRunExecuteRequest(BaseModel):
-    workspaceDir: str
-    mutantIds: List[str]
-    parallelWorkers: int = 4
-    useIncrementalCache: bool = True
-
-
-class TestGenerateRequest(BaseModel):
-    workspaceDir: str
-    survivingMutantIds: List[str]
-    targetFiles: List[str]
-    testFile: str
-    aiEngineProvider: Optional[str] = None
-    aiApiKey: Optional[str] = None
-
-
-# ══════════════════════════════════════════════════════════════
-# REST Endpoints
-# ══════════════════════════════════════════════════════════════
-
-@app.get("/health")
-def api_health():
-    return {"status": "ONLINE", "engine": "FastAPI", "version": "1.0.0"}
-
-
-@app.post("/api/v1/projects/{projectId}/test-runs/baseline")
-def execute_baseline(projectId: str, payload: BaselineRequest):
-    """Establish unmodified tests 'Golden Master' baseline metrics."""
-    # Support mixed workspaces where both C++ and Python elements are scanned and run
-    print(payload)
+def _resolve_baseline_runners(workspace_dir: str, requested_test_runner: str):
     runners_to_run = []
-    
-    req_runner = payload.testRunner.lower() if payload.testRunner else "all"
-    
+
+    req_runner = requested_test_runner.lower() if requested_test_runner else "all"
+
     pytest_runner = PytestRunnerAdapter()
     cpp_runner = CppRunnerAdapter()
-    
-    has_pytest = pytest_runner.detect_workspace(payload.workspaceDir)
-    has_cpp = cpp_runner.detect_workspace(payload.workspaceDir)
-    
-    print(has_pytest)
-    print(req_runner)
-    
+
+    has_pytest = pytest_runner.detect_workspace(workspace_dir)
+    has_cpp = cpp_runner.detect_workspace(workspace_dir)
+
     if req_runner in ["pytest", "python"]:
         if has_pytest:
             runners_to_run.append(("python", pytest_runner))
@@ -208,11 +279,61 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
             runners_to_run.append(("python", pytest_runner))
         if has_cpp:
             runners_to_run.append(("cpp", cpp_runner))
-            
+
+    return runners_to_run
+
+
+def _find_c_source_files(workspace_dir: str):
+    """Return all non-test C/C++ source files under the workspace root."""
+    c_exts = ('.c', '.cpp', '.cc', '.cxx')
+    found = []
+    for search_dir in [workspace_dir]:
+        if not os.path.isdir(search_dir):
+            continue
+        for fname in os.listdir(search_dir):
+            base, ext = os.path.splitext(fname)
+            if ext.lower() not in c_exts:
+                continue
+            # Skip test files and header-only files
+            if fname.startswith("test_") or fname.endswith("_test" + ext):
+                continue
+            if ext.lower() in ('.h', '.hpp'):
+                continue
+            full = os.path.join(search_dir, fname)
+            if os.path.isfile(full):
+                found.append(full)
+    return found
+
+
+def _execute_baseline_internal(projectId: str, payload: BaselineRequest, baseline_run_id: Optional[str] = None):
+    """Shared baseline execution implementation used by sync and async baseline endpoints."""
+    workspace_dir = resolve_workspace_dir(payload.workspaceDir)
+    runners_to_run = _resolve_baseline_runners(workspace_dir, payload.testRunner)
+
     if not runners_to_run:
         raise HTTPException(
             status_code=400,
             detail="Specified workspace does not contain matching pytest or C++ dynamic configurations."
+        )
+
+    suite_plan = []
+    for lang, _runner in runners_to_run:
+        if lang == "cpp":
+            c_sources = _find_c_source_files(workspace_dir)
+            if not c_sources:
+                c_sources = [os.path.join(workspace_dir, "agent", "hello.cpp")]
+            for source_path in c_sources:
+                suite_plan.append((lang, source_path))
+        else:
+            suite_plan.append((lang, os.path.join(workspace_dir, "hello.py")))
+
+    if baseline_run_id:
+        _set_baseline_progress(
+            baseline_run_id,
+            phase="running",
+            totalSuites=len(suite_plan),
+            completedSuites=0,
+            message="Baseline execution started",
         )
 
     tests_merged = []
@@ -220,62 +341,39 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
     duration_ms = 0
     overall_status = "TESTS_PASSED"
 
-    def _find_c_source_files(workspace_dir: str):
-        """Return all non-test C/C++ source files under the workspace root."""
-        C_EXTS = ('.c', '.cpp', '.cc', '.cxx')
-        found = []
-        for search_dir in [workspace_dir]:
-            if not os.path.isdir(search_dir):
-                continue
-            for fname in os.listdir(search_dir):
-                base, ext = os.path.splitext(fname)
-                if ext.lower() not in C_EXTS:
-                    continue
-                # Skip test files and header-only files
-                if fname.startswith("test_") or fname.endswith("_test" + ext):
-                    continue
-                if ext.lower() in ('.h', '.hpp'):
-                    continue
-                full = os.path.join(search_dir, fname)
-                if os.path.isfile(full):
-                    found.append(full)
-        return found
+    completed = 0
+    for lang, target_file in suite_plan:
+        runner = CppRunnerAdapter() if lang == "cpp" else PytestRunnerAdapter()
 
-    for lang, runner in runners_to_run:
-        if lang == "cpp":
-            # Find every C/C++ source file and run its paired test
-            c_sources = _find_c_source_files(payload.workspaceDir)
-            if not c_sources:
-                # hard fallback
-                c_sources = [os.path.join(payload.workspaceDir, "agent", "hello.cpp")]
-            for primary_file in c_sources:
-                temp_sandbox = os.path.join(tempfile_dir_root(), f"baseline-cpp-{uuid.uuid4().hex[:8]}")
-                res_lang = runner.execute_suite(
-                    workspace_root=payload.workspaceDir,
-                    sandbox_dir=temp_sandbox,
-                    target_file=primary_file,
-                    mutated_code=None
-                )
-                if res_lang.get("overallStatus") != "TESTS_PASSED":
-                    overall_status = "TESTS_FAILED"
-                total_tests += res_lang.get("totalTests", 0)
-                duration_ms += res_lang.get("durationMs", 0)
-                tests_merged.extend(res_lang.get("tests", []))
-        else:
-            # Python: pytest auto-discovers all test_*.py — one run covers everything
-            primary_file = os.path.join(payload.workspaceDir, "hello.py")
-            temp_sandbox = os.path.join(tempfile_dir_root(), f"baseline-python-{uuid.uuid4().hex[:8]}")
-            res_lang = runner.execute_suite(
-                workspace_root=payload.workspaceDir,
-                sandbox_dir=temp_sandbox,
-                target_file=primary_file,
-                mutated_code=None
+        if baseline_run_id:
+            _set_baseline_progress(
+                baseline_run_id,
+                currentFramework=lang,
+                currentTarget=target_file,
+                message=f"Running {lang} baseline for {os.path.basename(target_file)}",
             )
-            if res_lang.get("overallStatus") != "TESTS_PASSED":
-                overall_status = "TESTS_FAILED"
-            total_tests += res_lang.get("totalTests", 0)
-            duration_ms += res_lang.get("durationMs", 0)
-            tests_merged.extend(res_lang.get("tests", []))
+
+        temp_sandbox = os.path.join(tempfile_dir_root(), f"baseline-{lang}-{uuid.uuid4().hex[:8]}")
+        res_lang = runner.execute_suite(
+            workspace_root=workspace_dir,
+            sandbox_dir=temp_sandbox,
+            target_file=target_file,
+            mutated_code=None,
+        )
+
+        if res_lang.get("overallStatus") != "TESTS_PASSED":
+            overall_status = "TESTS_FAILED"
+        total_tests += res_lang.get("totalTests", 0)
+        duration_ms += res_lang.get("durationMs", 0)
+        tests_merged.extend(res_lang.get("tests", []))
+
+        completed += 1
+        if baseline_run_id:
+            _set_baseline_progress(
+                baseline_run_id,
+                completedSuites=completed,
+                message=f"Completed {completed}/{len(suite_plan)} baseline suites",
+            )
 
     final_res = {
         "overallStatus": overall_status,
@@ -285,12 +383,12 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
         "testsPassed": total_tests if overall_status == "TESTS_PASSED" else max(0, total_tests - 1),
         "testsFailed": 0 if overall_status == "TESTS_PASSED" else 1,
         "totalTests": total_tests,
-        "tests": tests_merged
+        "tests": tests_merged,
     }
 
     DATABASE["projects"][projectId] = {
-        "workspace": payload.workspaceDir,
-        "baseline": final_res
+        "workspace": workspace_dir,
+        "baseline": final_res,
     }
 
     # Increment baseline run details inside the memory registry
@@ -300,19 +398,150 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
     else:
         DATABASE["baseline_runs_failed"] = DATABASE.get("baseline_runs_failed", 0) + 1
 
-    return {
-        "runId": f"base_{uuid.uuid4().hex[:8]}",
+    result = {
+        "runId": baseline_run_id or f"base_{uuid.uuid4().hex[:8]}",
         "status": "SUCCESS" if overall_status == "TESTS_PASSED" else "FAIL",
         "totalTests": total_tests,
         "durationMs": duration_ms,
-        "details": final_res
+        "details": final_res,
     }
+
+    if baseline_run_id:
+        run_state = DATABASE["baseline_runs"].get(baseline_run_id, {})
+        run_state.update(
+            {
+                "status": "COMPLETED",
+                "result": result,
+                "updatedAt": _utc_now_iso(),
+            }
+        )
+        DATABASE["baseline_runs"][baseline_run_id] = run_state
+        _set_baseline_progress(
+            baseline_run_id,
+            phase="completed",
+            currentFramework=None,
+            currentTarget=None,
+            message="Baseline execution completed",
+        )
+
+    return result
+
+
+def _run_baseline_background(run_id: str, projectId: str, payload_dict: Dict[str, Any]):
+    payload = BaselineRequest(**payload_dict)
+    try:
+        _execute_baseline_internal(projectId, payload, baseline_run_id=run_id)
+    except Exception as exc:
+        run_state = DATABASE["baseline_runs"].get(run_id, {})
+        run_state.update(
+            {
+                "status": "ERROR",
+                "errorMessage": str(exc),
+                "updatedAt": _utc_now_iso(),
+            }
+        )
+        DATABASE["baseline_runs"][run_id] = run_state
+        _set_baseline_progress(
+            run_id,
+            phase="error",
+            currentFramework=None,
+            currentTarget=None,
+            message="Baseline execution failed",
+        )
+
+
+class MutationGenerateRequest(BaseModel):
+    workspaceDir: str
+    targetFiles: List[str]
+    operators: List[str] = [
+        "relational_operator_replacement",
+        "arithmetic_substitution",
+        "boundary_value_tweak",
+        "boolean_inversion",
+        "return_value_stripping"
+    ]
+    aiEngineProvider: Optional[str] = None
+    aiApiKey: Optional[str] = None
+    aiProviderUrl: Optional[str] = None
+
+
+class TestRunExecuteRequest(BaseModel):
+    workspaceDir: str
+    mutantIds: List[str]
+    parallelWorkers: int = 4
+    useIncrementalCache: bool = True
+
+
+class TestGenerateRequest(BaseModel):
+    workspaceDir: str
+    survivingMutantIds: List[str]
+    targetFiles: List[str]
+    testFile: str
+    aiEngineProvider: Optional[str] = None
+    aiApiKey: Optional[str] = None
+    aiProviderUrl: Optional[str] = None
+
+
+# ══════════════════════════════════════════════════════════════
+# REST Endpoints
+# ══════════════════════════════════════════════════════════════
+
+@app.get("/health")
+def api_health():
+    return {"status": "ONLINE", "engine": "FastAPI", "version": "1.0.0"}
+
+
+@app.post("/api/v1/projects/{projectId}/test-runs/baseline")
+def execute_baseline(projectId: str, payload: BaselineRequest):
+    """Establish unmodified tests 'Golden Master' baseline metrics."""
+    return _execute_baseline_internal(projectId, payload)
+
+
+@app.post("/api/v1/projects/{projectId}/test-runs/baseline/start")
+def start_baseline(projectId: str, payload: BaselineRequest, bg_tasks: BackgroundTasks):
+    """Start baseline execution asynchronously and return a run ID for progress polling."""
+    run_id = f"base_{uuid.uuid4().hex[:8]}"
+    DATABASE["baseline_runs"][run_id] = {
+        "runId": run_id,
+        "status": "IN_PROGRESS",
+        "startedAt": _utc_now_iso(),
+        "updatedAt": _utc_now_iso(),
+        "progress": {
+            "phase": "queued",
+            "totalSuites": 0,
+            "completedSuites": 0,
+            "currentFramework": None,
+            "currentTarget": None,
+            "message": "Queued",
+        },
+    }
+
+    bg_tasks.add_task(
+        _run_baseline_background,
+        run_id,
+        projectId,
+        payload.model_dump(),
+    )
+
+    return {
+        "runId": run_id,
+        "status": "IN_PROGRESS",
+    }
+
+
+@app.get("/api/v1/projects/{projectId}/test-runs/baseline/{runId}/status")
+def baseline_status(projectId: str, runId: str):
+    if runId not in DATABASE["baseline_runs"]:
+        raise HTTPException(status_code=404, detail="Requested baseline run session not discovered.")
+    return DATABASE["baseline_runs"][runId]
 
 
 @app.post("/api/v1/projects/{projectId}/mutations/generate")
 def generate_mutations(projectId: str, payload: MutationGenerateRequest):
     """Scan and generate logical AST mutation candidates."""
+    workspace_dir = resolve_workspace_dir(payload.workspaceDir)
     all_mutants = []
+    used_mutant_ids = set()
     requested_ops = set(payload.operators or [])
     legacy_aliases = {
         "arithmetic": "arithmetic_substitution",
@@ -326,12 +555,12 @@ def generate_mutations(projectId: str, payload: MutationGenerateRequest):
         if os.path.isabs(file_rel):
             full_path = file_rel
         else:
-            full_path = os.path.join(payload.workspaceDir, file_rel)
+            full_path = os.path.join(workspace_dir, file_rel)
             
         if not os.path.exists(full_path):
             # Fallback to local files if path mismatch
             fallback_name = os.path.basename(file_rel)
-            fallback_path = os.path.join(payload.workspaceDir, "agent", fallback_name)
+            fallback_path = os.path.join(workspace_dir, "agent", fallback_name)
             if os.path.exists(fallback_path):
                 full_path = fallback_path
             else:
@@ -347,11 +576,34 @@ def generate_mutations(projectId: str, payload: MutationGenerateRequest):
                 m for m in file_candidates
                 if m.get("operator_type") in requested_ops_normalized
             ]
-        all_mutants.extend(file_candidates)
+
+        for candidate in file_candidates:
+            base_id = str(candidate.get("mutant_id") or f"mut_{uuid.uuid4().hex[:8]}")
+            unique_id = base_id
+
+            if unique_id in used_mutant_ids:
+                source_path = str(candidate.get("file_path") or file_rel or "file")
+                source_slug = "".join(ch if ch.isalnum() else "_" for ch in source_path).strip("_").lower() or "file"
+                line = candidate.get("line_number", "x")
+                col = candidate.get("col_offset", "x")
+                suffix = 1
+                unique_id = f"{base_id}__{source_slug}_{line}_{col}_{suffix}"
+                while unique_id in used_mutant_ids:
+                    suffix += 1
+                    unique_id = f"{base_id}__{source_slug}_{line}_{col}_{suffix}"
+
+            candidate["mutant_id"] = unique_id
+            used_mutant_ids.add(unique_id)
+            all_mutants.append(candidate)
 
     # Apply AI Intelligence selection weighting and prioritization
-    language = detect_language_from_targets(payload.workspaceDir, payload.targetFiles)
-    ai_engine = build_ai_engine(language, payload.aiEngineProvider, payload.aiApiKey)
+    language = detect_language_from_targets(workspace_dir, payload.targetFiles)
+    ai_engine = build_ai_engine(
+        language,
+        payload.aiEngineProvider,
+        payload.aiApiKey,
+        payload.aiProviderUrl,
+    )
     prioritized_list = ai_engine.prioritize_mutants(all_mutants)
 
     # Cache mutant schemas to server database register
@@ -389,6 +641,7 @@ def reset_project_database(projectId: str):
     DATABASE["projects"][projectId] = {}
     DATABASE["mutations_cache"] = {}
     DATABASE["mutation_runs"] = {}
+    DATABASE["baseline_runs"] = {}
     DATABASE["active_acceptance"] = {}
     DATABASE["baseline_runs_count"] = 0
     DATABASE["baseline_runs_passed"] = 0
@@ -399,7 +652,7 @@ def reset_project_database(projectId: str):
 @app.post("/api/v1/projects/{projectId}/mutations/{mutantId}/preview")
 def preview_mutation(projectId: str, mutantId: str, payload: Dict[str, Any]):
     """Apply the specified mutation AST transform and return the mutated code text."""
-    workspace_dir = payload.get("workspaceDir")
+    workspace_dir = resolve_workspace_dir(payload.get("workspaceDir"))
     candidates = list(DATABASE["mutations_cache"].values())
     mutant = DATABASE["mutations_cache"].get(mutantId)
     if not mutant:
@@ -438,10 +691,21 @@ def run_mutation_workers_background(run_id: str, proj_id: str, ws_dir: str, muta
 
     # Get cached items
     candidates = list(DATABASE["mutations_cache"].values())
+    baseline_tests = DATABASE.get("projects", {}).get(proj_id, {}).get("baseline", {}).get("tests", [])
+    total_mutants = len(mutant_ids)
 
-    for m_id in mutant_ids:
+    _set_run_progress(run_id, totalMutants=total_mutants, completedMutants=0, phase="running")
+    _append_run_log(
+        run_id,
+        "INFO",
+        "engine",
+        f"Mutation run started for {total_mutants} accepted mutants.",
+    )
+
+    for idx, m_id in enumerate(mutant_ids):
         mutant = DATABASE["mutations_cache"].get(m_id)
         if not mutant:
+            _append_run_log(run_id, "WARN", "engine", "Skipped mutant not found in cache.", mutant_id=m_id)
             continue
 
         orig_file = mutant["file_path"]
@@ -464,6 +728,53 @@ def run_mutation_workers_background(run_id: str, proj_id: str, ws_dir: str, muta
 
         adapter = get_adapter_for_file(orig_file)
         runner = get_runner_for_file(orig_file)
+        framework = runner.__class__.__name__.replace("RunnerAdapter", "").lower()
+
+        _set_run_progress(
+            run_id,
+            currentMutantId=m_id,
+            currentMutantFile=mutant.get("file_path"),
+            currentFramework=framework,
+            currentTestName=None,
+            phase="running",
+        )
+        _append_run_log(
+            run_id,
+            "INFO",
+            "engine",
+            f"Executing mutant {idx + 1}/{total_mutants}: {m_id}",
+            mutant_id=m_id,
+            framework=framework,
+        )
+
+        if baseline_tests:
+            _append_run_log(
+                run_id,
+                "INFO",
+                "framework",
+                (
+                    "Live per-test telemetry is not provided by this framework adapter. "
+                    "Using discovered baseline tests as execution feed."
+                ),
+                mutant_id=m_id,
+                framework=framework,
+                synthetic=True,
+            )
+            for test_meta in baseline_tests[:50]:
+                test_name = test_meta.get("name")
+                if not test_name:
+                    continue
+                _set_run_progress(run_id, currentTestName=test_name)
+                _append_run_log(
+                    run_id,
+                    "DEBUG",
+                    "framework",
+                    f"Executing test: {test_name}",
+                    mutant_id=m_id,
+                    test_name=test_name,
+                    framework=framework,
+                    synthetic=True,
+                )
 
         # Apply target mutation change code via adapter
         mutated_code_src = adapter.apply_mutation(unmu_code, m_id, candidates)
@@ -480,6 +791,32 @@ def run_mutation_workers_background(run_id: str, proj_id: str, ws_dir: str, muta
         if res["overallStatus"] == "TIMEOUT":
             status_result = "KILLED" # Timeout indicates successful infinite-loop detection which verifies mutant kill (as per mutation testing guidelines)
 
+        tests = res.get("tests", [])
+        failed_tests = [t for t in tests if t.get("status") == "FAILED"]
+        if failed_tests:
+            for failed in failed_tests[:10]:
+                test_name = failed.get("name")
+                if test_name:
+                    _append_run_log(
+                        run_id,
+                        "WARN",
+                        "framework",
+                        f"Test failed: {test_name}",
+                        mutant_id=m_id,
+                        test_name=test_name,
+                        framework=framework,
+                    )
+
+        _append_run_log(
+            run_id,
+            "INFO",
+            "engine",
+            f"Mutant {m_id} completed with status {status_result}.",
+            mutant_id=m_id,
+            test_name=res.get("killingTest"),
+            framework=framework,
+        )
+
         results.append({
             "mutantId": m_id,
             "status": status_result,
@@ -492,26 +829,68 @@ def run_mutation_workers_background(run_id: str, proj_id: str, ws_dir: str, muta
             "line_number": mutant.get("line_number")
         })
 
+        _set_run_progress(
+            run_id,
+            completedMutants=len(results),
+            currentTestName=None,
+            phase="running",
+        )
+
     DATABASE["mutation_runs"][run_id] = {
         "status": "COMPLETED",
-        "results": results
+        "results": results,
+        "runId": run_id,
+        "startedAt": DATABASE["mutation_runs"].get(run_id, {}).get("startedAt"),
+        "updatedAt": _utc_now_iso(),
+        "logs": DATABASE["mutation_runs"].get(run_id, {}).get("logs", []),
+        "progress": {
+            "totalMutants": total_mutants,
+            "completedMutants": len(results),
+            "currentMutantId": None,
+            "currentMutantFile": None,
+            "currentFramework": None,
+            "currentTestName": None,
+            "phase": "completed",
+        },
     }
+    _append_run_log(run_id, "INFO", "engine", "Mutation run completed.")
 
 
 @app.post("/api/v1/projects/{projectId}/test-runs")
 def execute_test_runs(projectId: str, payload: TestRunExecuteRequest, bg_tasks: BackgroundTasks):
     """Trigger parallel isolation sandboxes to test-run mutants in background threads."""
+    workspace_dir = resolve_workspace_dir(payload.workspaceDir)
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     DATABASE["mutation_runs"][run_id] = {
+        "runId": run_id,
+        "startedAt": _utc_now_iso(),
+        "updatedAt": _utc_now_iso(),
         "status": "IN_PROGRESS",
-        "results": []
+        "results": [],
+        "logs": [],
+        "progress": {
+            "totalMutants": len(payload.mutantIds),
+            "completedMutants": 0,
+            "currentMutantId": None,
+            "currentMutantFile": None,
+            "currentFramework": None,
+            "currentTestName": None,
+            "phase": "queued",
+        },
     }
+
+    _append_run_log(
+        run_id,
+        "INFO",
+        "engine",
+        f"Run queued with {len(payload.mutantIds)} mutants and parallelWorkers={payload.parallelWorkers}.",
+    )
 
     bg_tasks.add_task(
         run_mutation_workers_background,
         run_id,
         projectId,
-        payload.workspaceDir,
+        workspace_dir,
         payload.mutantIds
     )
 
@@ -533,6 +912,7 @@ def query_run_status(projectId: str, runId: str):
 @app.post("/api/v1/projects/{projectId}/tests/generate")
 def execute_tests_generation(projectId: str, payload: TestGenerateRequest):
     """Synthesize custom unit tests designed specifically to kill survivors."""
+    workspace_dir = resolve_workspace_dir(payload.workspaceDir)
     proposed_tests = []
     for m_id in payload.survivingMutantIds:
         mutant = DATABASE["mutations_cache"].get(m_id)
@@ -540,27 +920,27 @@ def execute_tests_generation(projectId: str, payload: TestGenerateRequest):
             continue
 
         tgt_rel = payload.targetFiles[0] if payload.targetFiles else "hello.py"
-        full_tgt = os.path.join(payload.workspaceDir, tgt_rel)
+        full_tgt = os.path.join(workspace_dir, tgt_rel)
         if not os.path.exists(full_tgt):
             if is_cpp_source(tgt_rel):
-                full_tgt = os.path.join(payload.workspaceDir, "hello.cpp")
+                full_tgt = os.path.join(workspace_dir, "hello.cpp")
                 if not os.path.exists(full_tgt):
-                    full_tgt = os.path.join(payload.workspaceDir, "hello.c")
+                    full_tgt = os.path.join(workspace_dir, "hello.c")
             else:
-                full_tgt = os.path.join(payload.workspaceDir, "hello.py")
+                full_tgt = os.path.join(workspace_dir, "hello.py")
         
         with open(full_tgt, "r", encoding="utf-8") as f:
             tgt_src = f.read()
 
         # Load standard existing tests to provide styling structure
-        full_test = os.path.join(payload.workspaceDir, payload.testFile)
+        full_test = os.path.join(workspace_dir, payload.testFile)
         if not os.path.exists(full_test):
             fallback_test = "test_hello.py"
             if is_cpp_source(payload.testFile):
                 fallback_test = "test_hello.c"
-                if not os.path.exists(os.path.join(payload.workspaceDir, fallback_test)):
+                if not os.path.exists(os.path.join(workspace_dir, fallback_test)):
                     fallback_test = "test_hello.cpp"
-            full_test = os.path.join(payload.workspaceDir, fallback_test)
+            full_test = os.path.join(workspace_dir, fallback_test)
 
         existing_t = ""
         if os.path.exists(full_test):
@@ -568,7 +948,12 @@ def execute_tests_generation(projectId: str, payload: TestGenerateRequest):
                 existing_t = f.read()[:1500] # trim context length limit
 
         language = detect_language_from_file_path(mutant.get("file_path", tgt_rel))
-        ai_engine = build_ai_engine(language, payload.aiEngineProvider, payload.aiApiKey)
+        ai_engine = build_ai_engine(
+            language,
+            payload.aiEngineProvider,
+            payload.aiApiKey,
+            payload.aiProviderUrl,
+        )
         ans = ai_engine.generate_test_to_kill_survivor(tgt_src, mutant, existing_t)
         proposed_tests.append({
             "filePath": payload.testFile,

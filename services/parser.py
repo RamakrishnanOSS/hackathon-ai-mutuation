@@ -399,6 +399,7 @@ class CppASTAdapter(BaseASTAdapter):
 
             depth = 1
             j = i + 1
+            found_template_range = False
             while j < n:
                 if line[j] == '<':
                     # Allow nested templates; ignore shift syntax as template open.
@@ -413,6 +414,7 @@ class CppASTAdapter(BaseASTAdapter):
                         if depth <= 0:
                             ranges.append((i, j + 1))
                             i = j + 2
+                            found_template_range = True
                             break
                         j += 2
                         continue
@@ -420,12 +422,14 @@ class CppASTAdapter(BaseASTAdapter):
                     if depth == 0:
                         ranges.append((i, j))
                         i = j + 1
+                        found_template_range = True
                         break
                 elif line[j] == ';' and depth > 0:
                     # Probably not a template argument list.
                     break
                 j += 1
-            else:
+
+            if not found_template_range:
                 i += 1
 
         return ranges

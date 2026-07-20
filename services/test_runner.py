@@ -40,6 +40,43 @@ class TestRunnerAdapter(ABC):
         pass
 
 
+def _build_workspace_ignore_patterns():
+    """Exclude heavy non-test directories to keep sandbox copies fast and deterministic."""
+    return shutil.ignore_patterns(
+        "__pycache__",
+        ".pytest_cache",
+        ".git",
+        "node_modules",
+        ".next",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        "coverage",
+        ".coverage",
+        ".mypy_cache",
+        ".ruff_cache",
+        "vscode-extension",
+        "frontend",
+    )
+
+
+def _copy_workspace_to_sandbox(workspace_root: str, sandbox_dir: str):
+    ignore_patterns = _build_workspace_ignore_patterns()
+    for item in os.listdir(workspace_root):
+        src_path = os.path.join(workspace_root, item)
+        dst_path = os.path.join(sandbox_dir, item)
+
+        # Never recurse into transient sandboxes
+        if "mutation-sandbox" in item:
+            continue
+
+        if os.path.isdir(src_path):
+            shutil.copytree(src_path, dst_path, ignore=ignore_patterns, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src_path, dst_path)
+
+
 class PytestRunnerAdapter(TestRunnerAdapter):
     """Execution adapter implementing isolated Pytest runs."""
 
@@ -64,22 +101,7 @@ class PytestRunnerAdapter(TestRunnerAdapter):
         os.makedirs(sandbox_dir, exist_ok=True)
 
         # Step 2: Mirror active workspace files into virtual sandbox
-        # (Exclude test execution folders / caches to keep runs lightweight)
-        ignore_patterns = shutil.ignore_patterns(
-            "__pycache__", ".pytest_cache", ".git", "node_modules", "vscode-extension"
-        )
-        for item in os.listdir(workspace_root):
-            src_path = os.path.join(workspace_root, item)
-            dst_path = os.path.join(sandbox_dir, item)
-            
-            # Avoid duplicating our own temp folder if it lies under workspace
-            if "mutation-sandbox" in item or "vscode-extension" in item:
-                continue
-
-            if os.path.isdir(src_path):
-                shutil.copytree(src_path, dst_path, ignore=ignore_patterns, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src_path, dst_path)
+        _copy_workspace_to_sandbox(workspace_root, sandbox_dir)
 
         # Step 3: Inject mutated file projection in virtual sandbox
         if mutated_code is not None:
@@ -90,9 +112,9 @@ class PytestRunnerAdapter(TestRunnerAdapter):
                 relative_target = os.path.relpath(norm_target, norm_workspace)
             else:
                 relative_target = os.path.relpath(target_file, workspace_root)
-                
+
             sandbox_target_path = os.path.join(sandbox_dir, relative_target)
-            
+
             # Ensure folder tree exists
             os.makedirs(os.path.dirname(sandbox_target_path), exist_ok=True)
             with open(sandbox_target_path, "w", encoding="utf-8") as f:
@@ -129,15 +151,15 @@ class PytestRunnerAdapter(TestRunnerAdapter):
             tests_passed = 0
             tests_failed = 0
             tests_list = []
-            
+
             passed_match = re.search(r'(\d+)\s+passed', stdout)
             if passed_match:
                 tests_passed = int(passed_match.group(1))
-            
+
             failed_match = re.search(r'(\d+)\s+failed', stdout)
             if failed_match:
                 tests_failed = int(failed_match.group(1))
-                
+
             total_tests = tests_passed + tests_failed
             if total_tests == 0:
                 # If regex summary wasn't found, count individual lines
@@ -247,20 +269,7 @@ class CppRunnerAdapter(TestRunnerAdapter):
         os.makedirs(sandbox_dir, exist_ok=True)
 
         # Step 2: Mirror active workspace files into virtual sandbox
-        ignore_patterns = shutil.ignore_patterns(
-            "__pycache__", ".pytest_cache", ".git", "node_modules", "vscode-extension"
-        )
-        for item in os.listdir(workspace_root):
-            src_path = os.path.join(workspace_root, item)
-            dst_path = os.path.join(sandbox_dir, item)
-            
-            if "mutation-sandbox" in item or "vscode-extension" in item:
-                continue
-
-            if os.path.isdir(src_path):
-                shutil.copytree(src_path, dst_path, ignore=ignore_patterns, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src_path, dst_path)
+        _copy_workspace_to_sandbox(workspace_root, sandbox_dir)
 
         # Step 3: Inject mutated file projection in virtual sandbox
         if mutated_code is not None:

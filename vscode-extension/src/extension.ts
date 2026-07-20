@@ -15,7 +15,7 @@ let lastSelectedSourceFiles: string[] = [];
 
 function loadYamlConfig(wsDir: string): any {
   const defaultConfig = {
-    coreUrl: 'http://core-service:8000',
+    coreUrl: 'http://127.0.0.1:8000',
     grafanaUrl: 'http://grafana:3000',
     defaultSourceFile: 'hello.py',
     defaultTestFile: 'test_hello.py',
@@ -102,12 +102,36 @@ export function activate(context: vscode.ExtensionContext) {
       const runnerType = "all";
       outputChannel.appendLine(`   • Test runner: ${runnerType} (backend will auto-detect available runners)`);
 
-      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/test-runs/baseline`, {
+      const started = await makePostRequest(`${backendUrl}/api/v1/projects/default/test-runs/baseline/start`, {
         workspaceDir: wsDir,
         testRunner: runnerType
       });
 
-      outputChannel.appendLine(`📊 Baseline Result Payload: ${JSON.stringify(resp, null, 2)}`);
+      outputChannel.appendLine(`📊 Baseline Start Payload: ${JSON.stringify(started, null, 2)}`);
+      if (!started.runId) {
+        throw new Error("Baseline start did not return runId.");
+      }
+
+      let finalStatus: any = null;
+      for (let i = 0; i < 240; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const statusResp = await makeGetRequest(`${backendUrl}/api/v1/projects/default/test-runs/baseline/${started.runId}/status`);
+        finalStatus = statusResp;
+        const progress = statusResp.progress || {};
+        outputChannel.appendLine(
+          `   • Baseline poll: status=${statusResp.status} phase=${progress.phase || 'n/a'} suites=${progress.completedSuites ?? 0}/${progress.totalSuites ?? 0} framework=${progress.currentFramework || ''}`
+        );
+        if (statusResp.status === "COMPLETED" || statusResp.status === "ERROR") {
+          break;
+        }
+      }
+
+      if (!finalStatus || finalStatus.status !== "COMPLETED") {
+        throw new Error(finalStatus?.errorMessage || "Baseline run did not complete in time.");
+      }
+
+      const resp = finalStatus.result || {};
+      outputChannel.appendLine(`📊 Baseline Final Payload: ${JSON.stringify(finalStatus, null, 2)}`);
       if (resp.status === "SUCCESS") {
         statusBarItem.text = "🧬 Mutation: Baseline PASS";
         outputChannel.appendLine("✅ Baseline tests PASSED! Sandbox execution limits set.");
@@ -175,7 +199,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const config = loadYamlConfig(wsDir);
     const backendUrl = config.coreUrl;
-    const aiProvider = vscode.workspace.getConfiguration('mutationTesting').get<string>('aiProvider', 'mock');
+    const aiProvider = vscode.workspace.getConfiguration('mutationTesting').get<string>('aiProvider', 'ollama');
 
     let targetFiles: string[] = [];
     let selectedOperators: string[] = [
@@ -1779,61 +1803,117 @@ function escapeHtml(text: string): string {
 // ══════════════════════════════════════════════════════════════
 
 function makePostRequest(urlStr: string, payload: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlStr);
-    const postData = JSON.stringify(payload);
-
-    const options: http.RequestOptions = {
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'POST',
-      agent: false, // Forces a new direct connection, bypassing VS Code's global network proxy (e.g. 127.0.0.1:3128)
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-
-    const req = http.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          reject(new Error(`Failed parsing backend response: ${data}`));
-        }
-      });
-    });
-
-    req.on('error', (err) => reject(err));
-    req.write(postData);
-    req.end();
-  });
+  const candidates = buildBackendUrlCandidates(urlStr);
+  return makePostRequestWithFallback(candidates, payload);
 }
 
 function makeGetRequest(urlStr: string): Promise<any> {
+  const candidates = buildBackendUrlCandidates(urlStr);
+  return makeGetRequestWithFallback(candidates);
+}
+
+function buildBackendUrlCandidates(urlStr: string): string[] {
+  const base = new URL(urlStr);
+  const candidates = [urlStr];
+
+  const hasDefaultPort = base.port ? `:${base.port}` : '';
+  if (base.hostname === '127.0.0.1' || base.hostname === 'localhost') {
+    candidates.push(`${base.protocol}//core-service${hasDefaultPort}${base.pathname}`);
+  } else if (base.hostname === 'core-service') {
+    candidates.push(`${base.protocol}//127.0.0.1${hasDefaultPort}${base.pathname}`);
+    candidates.push(`${base.protocol}//localhost${hasDefaultPort}${base.pathname}`);
+  }
+
+  return Array.from(new Set(candidates));
+}
+
+function makePostRequestWithFallback(candidates: string[], payload: any): Promise<any> {
   return new Promise((resolve, reject) => {
-    const url = new URL(urlStr);
-    const options: http.RequestOptions = {
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'GET',
-      agent: false // Bypasses active network proxy for local loopback GET actions
+    const postData = JSON.stringify(payload);
+    let idx = 0;
+
+    const tryNext = (lastErr?: any) => {
+      if (idx >= candidates.length) {
+        reject(lastErr || new Error('POST request failed for all backend URL candidates.'));
+        return;
+      }
+
+      const url = new URL(candidates[idx++]);
+      const options: http.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        agent: false,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData)
+        }
+      };
+
+      const req = http.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          if ((res.statusCode || 0) >= 400) {
+            const err = new Error(`HTTP ${res.statusCode}: ${data || 'request failed'}`);
+            tryNext(err);
+            return;
+          }
+          try {
+            resolve(JSON.parse(data));
+          } catch {
+            reject(new Error(`Failed parsing backend response: ${data}`));
+          }
+        });
+      });
+
+      req.on('error', (err) => tryNext(err));
+      req.write(postData);
+      req.end();
     };
 
-    http.get(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          reject(new Error(`Failed parsing GET response.`));
-        }
-      });
-    }).on('error', (err) => reject(err));
+    tryNext();
+  });
+}
+
+function makeGetRequestWithFallback(candidates: string[]): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let idx = 0;
+
+    const tryNext = (lastErr?: any) => {
+      if (idx >= candidates.length) {
+        reject(lastErr || new Error('GET request failed for all backend URL candidates.'));
+        return;
+      }
+
+      const url = new URL(candidates[idx++]);
+      const options: http.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'GET',
+        agent: false
+      };
+
+      http.get(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          if ((res.statusCode || 0) >= 400) {
+            const err = new Error(`HTTP ${res.statusCode}: ${data || 'request failed'}`);
+            tryNext(err);
+            return;
+          }
+          try {
+            resolve(JSON.parse(data));
+          } catch {
+            reject(new Error(`Failed parsing GET response.`));
+          }
+        });
+      }).on('error', (err) => tryNext(err));
+    };
+
+    tryNext();
   });
 }

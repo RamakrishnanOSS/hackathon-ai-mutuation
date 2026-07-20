@@ -10,25 +10,25 @@ grafana:
 ai_engine_python:
   provider: "ollama"
   openai_model: "gpt-4o"
-  ollama_model: "llama3"
+  ollama_model: "llama2"
   openai_temperature: 0.1
   ollama_host: "http://localhost:11434"
   ollama_timeout_seconds: 30
   openai_api_key_env: "OPENAI_API_KEY"
 
 ai_engine_cpp:
-  provider: "openai"
+  provider: "ollama"
   openai_model: "gpt-4o"
-  ollama_model: "llama3"
+  ollama_model: "llama2"
   openai_temperature: 0.1
   ollama_host: "http://localhost:11434"
   ollama_timeout_seconds: 30
   openai_api_key_env: "OPENAI_API_KEY"
 
 ai_engine_c:
-  provider: "openai"
+  provider: "ollama"
   openai_model: "gpt-4o"
-  ollama_model: "llama3"
+  ollama_model: "llama2"
   openai_temperature: 0.1
   ollama_host: "http://localhost:11434"
   ollama_timeout_seconds: 30

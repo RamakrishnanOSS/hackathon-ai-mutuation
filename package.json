@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "dev:web": "powershell -ExecutionPolicy Bypass -File ./scripts/start-dev.ps1",
+    "dev:restart": "powershell -ExecutionPolicy Bypass -File ./scripts/restart-dev.ps1"
+  },
   "dependencies": {
     "@vscode/vsce": "^3.9.2"
   }

@@ -29,8 +29,7 @@ services:
       dockerfile: Dockerfile.core
     container_name: core-service
     volumes:
-      - ./agent:/workspace:cached
-      - ./services:/workspace/services:cached
+      - ./:/workspace:cached
     networks:
       - mutation-net
     ports:
@@ -38,6 +37,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - MUTATION_WORKSPACE_DIR=/workspace
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]

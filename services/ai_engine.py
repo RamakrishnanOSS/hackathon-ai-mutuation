@@ -24,9 +24,11 @@ class AIEngine:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        provider_url: Optional[str] = None,
     ):
         self.config = config or {}
-        self.provider = (provider or self.config.get("provider", "mock")).lower()
+        self.provider = (provider or self.config.get("provider", "ollama")).lower()
+        self.provider_url = (provider_url or self.config.get("provider_url") or "").strip()
 
         api_key_env = self.config.get("openai_api_key_env", "OPENAI_API_KEY")
         self.api_key = api_key or os.environ.get(api_key_env, "mock-key")
@@ -39,12 +41,15 @@ class AIEngine:
             self.model = self.config.get("ollama_model", "llama3")
 
         self.openai_temperature = float(self.config.get("openai_temperature", 0.1))
-        self.ollama_host = self.config.get("ollama_host", "http://localhost:11434")
+        self.ollama_host = self.provider_url or self.config.get("ollama_host", "http://localhost:11434")
         self.ollama_timeout_seconds = int(self.config.get("ollama_timeout_seconds", 30))
 
         # Initialize standard OpenAI client if requested
         if self.provider == "openai" and "mock-key" not in self.api_key:
-            self.client = OpenAI(api_key=self.api_key)
+            if self.provider_url:
+                self.client = OpenAI(api_key=self.api_key, base_url=self.provider_url)
+            else:
+                self.client = OpenAI(api_key=self.api_key)
         else:
             self.client = None
 
