@@ -14,10 +14,10 @@ from .python_adapter import PythonBuildAdapter
 class BuildSystemFactory:
     """Factory for detecting and instantiating build system adapters."""
     
-    # Adapters in order of preference
+    # Adapters in order of preference (Python first as primary mutation target)
     ADAPTERS = [
+        PythonBuildAdapter,
         CMakeBuildAdapter,
-        PythonBuildAdapter
     ]
     
     # Aliases for build system names (maps user input to adapter)
@@ -34,17 +34,27 @@ class BuildSystemFactory:
     @classmethod
     def detect(cls, project_path: str) -> Optional[str]:
         """
-        Detect the build system used by a project.
-        
+        Detect the build system used by a project, including subdirectories.
+
         Args:
             project_path: Root path of the project
-            
+
         Returns:
             Name of detected build system, or None if no match
         """
+        project = Path(project_path)
+        # Check root
         for adapter_class in cls.ADAPTERS:
             if adapter_class.detect(project_path):
                 return adapter_class.name()
+        # Check subdirectories
+        _SKIP = {"__pycache__", "node_modules", ".git", ".venv", "venv", "build", "dist"}
+        subdirs = sorted(d for d in project.iterdir()
+                         if d.is_dir() and not d.name.startswith(".") and d.name not in _SKIP)
+        for adapter_class in cls.ADAPTERS:
+            for subdir in subdirs:
+                if adapter_class.detect(str(subdir)):
+                    return adapter_class.name()
         return None
     
     @classmethod
@@ -85,13 +95,25 @@ class BuildSystemFactory:
                 f"Supported: {', '.join(sorted(set(cls.BUILD_SYSTEM_ALIASES.keys())))}"
             )
         
-        # Auto-detect
+        # Auto-detect at root first
         for adapter_class in cls.ADAPTERS:
             if adapter_class.detect(str(project)):
                 return adapter_class(str(project))
-        
+
+        # Root had no markers — scan one level of subdirectories.
+        # Skip hidden dirs (.devcontainer, .git, etc.) and non-project dirs.
+        _SKIP = {"__pycache__", "node_modules", ".git", ".venv", "venv", "build", "dist"}
+        subdirs = sorted(
+            d for d in project.iterdir()
+            if d.is_dir() and not d.name.startswith(".") and d.name not in _SKIP
+        )
+        for adapter_class in cls.ADAPTERS:
+            for subdir in subdirs:
+                if adapter_class.detect(str(subdir)):
+                    return adapter_class(str(subdir))
+
         raise ValueError(
-            f"No supported build system detected in {project_path}. "
+            f"No supported build system detected in {project_path} or its subdirectories. "
             f"Supported: CMake (CMakeLists.txt), Python (pytest.ini/conftest.py/test_*.py)"
         )
     

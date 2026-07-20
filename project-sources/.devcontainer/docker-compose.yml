@@ -38,8 +38,8 @@ services:
   # ── Core mutation service (from Dockerfile.core) ───────────
   core-service:
     build:
-      context: ../../mutation-engine  # mutation-engine as build context
-      dockerfile: Dockerfile.core
+      context: ../..                 # repo root as build context
+      dockerfile: mutation-engine/Dockerfile.core
     ports:
       - "8001:8000"
     networks:

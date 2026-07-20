@@ -108,25 +108,39 @@ def resolve_project_path(project_path: Optional[str], workspace_dir: Optional[st
     """
     Resolve project path from new API (projectPath) or legacy API (workspaceDir).
     Prefers projectPath if both provided.
-    
+
+    If the resolved path contains a 'project-sources' subdirectory, the path is
+    automatically scoped to it — ensuring all build/test/mutation operations run
+    exclusively against project-sources, not arbitrary workspace or repo-root dirs.
+
     Args:
         project_path: New API project path
         workspace_dir: Legacy API workspace directory
-        
+
     Returns:
-        Resolved project path
-        
+        Resolved project path (scoped to project-sources/ if present)
+
     Raises:
         ValueError: If neither path is provided or path doesn't exist
     """
     path = project_path or workspace_dir
     if not path:
         raise ValueError("Either 'projectPath' or 'workspaceDir' must be provided")
-    
+
     resolved = os.path.abspath(os.path.expanduser(path))
     if not os.path.exists(resolved):
         raise ValueError(f"Project path does not exist: {path}")
-    
+
+    # Enforce project-sources scope: if the given path is not already inside
+    # project-sources/, check whether a project-sources/ subdirectory exists
+    # and descend into it automatically.
+    from pathlib import Path as _Path
+    p = _Path(resolved)
+    if p.name != "project-sources" and "project-sources" not in p.parts:
+        candidate = p / "project-sources"
+        if candidate.is_dir():
+            resolved = str(candidate)
+
     return resolved
 
 
