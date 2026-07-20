@@ -74,18 +74,37 @@ cmake .. && make && ctest         # Build and test C/C++ project
 
 ## Available Projects
 
-### C/C++ Project (`c-src/`)
-- **Framework:** CMake + CTest
-- **Tests:** 2 tests (test_sample.c, test_hello.cpp)
-- **Detection:** BuildSystemFactory detects via CMakeLists.txt
-- **Build:** `cmake .. && make && ctest`
+### C/C++ Project (`c-src/` and `cpp-src/`)
+
+Now split into separate directories:
+
+**C Code (`c-src/`)**
+- **Test Framework:** assert.h (default), with support for Check framework
+- **Tests:** test_sample.c
+- **Compiler:** GCC with C11 standard
+- **Build:** `gcc -std=c11 test_sample.c sample.c`
+
+**C++ Code (`cpp-src/`)**
+- **Test Framework:** gtest_mock.h (default), with support for Google Test, Catch2
+- **Tests:** test_hello.cpp
+- **Compiler:** G++ with C++17 standard
+- **Build:** `g++ -std=c++17 test_hello.cpp hello.cpp`
+
+**Combined Build (CMake)**
+- **CMake:** Separate CMakeLists.txt for each language
+- **CTest:** Automatic test discovery via `add_test()`
+- **Build:** `cd c-src && cmake .. && make && ctest` or `cd cpp-src && cmake .. && make && ctest`
 
 ### Python Project (`py-src/`)
-- **Framework:** pytest + multi-framework support
-- **Tests:** 125 tests (67 + 58)
-- **Detection:** BuildSystemFactory detects via pytest.ini
-- **Test frameworks:** pytest, unittest, nose2, tox
+- **Test Frameworks:** 
+  - pytest (primary, with parametrized tests, fixtures)
+  - unittest (auto-discovered and run by pytest)
+  - Hypothesis (optional, for property-based testing)
+- **Tests:** 125+ tests across multiple test modules
+- **Detection:** Automatic via pytest.ini and test file naming
 - **Build:** `python3 -m pytest tests/`
+
+**For detailed test framework configuration, see:** [TEST_FRAMEWORKS.md](../TEST_FRAMEWORKS.md)
 
 ## Development Workflow
 

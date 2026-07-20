@@ -1,7 +1,13 @@
 #!/bin/bash
 #
 # Compile and run C tests
+# Supported Frameworks: assert.h (default), Check, custom
 # Generates metrics: files, compile_pass, compile_fail, run_pass, run_fail
+#
+# Framework detection:
+#   - assert.h: Standard C assertions (default)
+#   - Check: Advanced C testing framework (if #include <check.h> found)
+#   - Custom: Any framework that respects exit codes (0=pass, non-zero=fail)
 #
 set +e
 
@@ -16,7 +22,15 @@ done
 
 echo "[TEST-C] Collecting C test file list..."
 find "$PROJECT_ROOT/project-sources/c-src/test" -type f -name 'test_*.c' | sort > "$REPORT_DIR/c-test-files.txt"
-echo "=== C test files ===" && cat "$REPORT_DIR/c-test-files.txt" || true
+
+echo "[TEST-C] Detecting test frameworks..."
+FRAMEWORK="assert.h"
+if grep -q '#include <check.h>' "$REPORT_DIR/c-test-files.txt" 2>/dev/null || \
+   grep -q "#include.*check.h" $(cat "$REPORT_DIR/c-test-files.txt" 2>/dev/null | head -1) 2>/dev/null; then
+  FRAMEWORK="Check"
+fi
+echo "[TEST-C] Detected framework: $FRAMEWORK"
+echo "=== C test files (Framework: $FRAMEWORK) ===" && cat "$REPORT_DIR/c-test-files.txt" || true
 
 echo "[TEST-C] Compiling and running C tests..."
 LOG="$REPORT_DIR/c-build.log"; : > "$LOG"

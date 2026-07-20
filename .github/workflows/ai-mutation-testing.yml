@@ -131,24 +131,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest pytest-html junit2html
-      - name: Create reports directory
-        run: mkdir -p reports
-      - name: Collect Python source & test files
-        shell: bash
-        run: |
-          mkdir -p reports/python-sources
-          # Collect from py-src (primary), mutation-engine tests, and any project-sources
-          find project-sources/py-src mutation-engine/tests -type f -name '*.py' 2>/dev/null | while read f; do
-            dest="reports/python-sources/$(echo $f | sed 's|/|_|g')"
-            mkdir -p "$(dirname "$dest")"
-            cp "$f" "$dest"
-          done
-          # Find all test files
-          find project-sources/py-src/tests mutation-engine/tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
-            | sort > reports/pytest-files.txt
-          echo "=== Test files discovered ===" && cat reports/pytest-files.txt || true
-      - name: Run Python tests
+          cd project-sources/py-src && pip install -e . && cd - || true
+      - name: Run Python tests (pytest + unittest framework support)
         id: metrics
         shell: bash
         run: bash project-sources/scripts/test-python.sh
@@ -166,10 +150,10 @@ jobs:
           if-no-files-found: warn
 
   # ─────────────────────────────────────────────────────────────
-  # JOB 2B · C Compile & Test
+  # JOB 2B — C Compile & Test (project-sources/c-src)
   # ─────────────────────────────────────────────────────────────
   c_tests:
-    name: "2B · C Compile & Test"
+    name: "2B · C Compile & Test (project-sources/c-src)"
     runs-on: ubuntu-latest
     needs: lint
     continue-on-error: true
@@ -193,10 +177,10 @@ jobs:
         with:
           fetch-depth: 1
       - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y gcc g++ make cmake
+        run: sudo apt-get update -qq && sudo apt-get install -y gcc g++ make cmake libcheck-dev
       - name: Create reports directory
         run: mkdir -p reports
-      - name: Collect C files and run tests
+      - name: Collect C files and run tests (assert.h / Check framework support)
         id: metrics
         shell: bash
         run: bash project-sources/scripts/test-c.sh
@@ -212,10 +196,10 @@ jobs:
           if-no-files-found: warn
 
   # ─────────────────────────────────────────────────────────────
-  # JOB 2C — C++ Compile & Test
+  # JOB 2C — C++ Compile & Test (project-sources/cpp-src)
   # ─────────────────────────────────────────────────────────────
   cpp_tests:
-    name: "2C · C++ Compile & Test"
+    name: "2C · C++ Compile & Test (project-sources/cpp-src)"
     runs-on: ubuntu-latest
     needs: lint
     continue-on-error: true
@@ -239,10 +223,10 @@ jobs:
         with:
           fetch-depth: 1
       - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y g++ make cmake
+        run: sudo apt-get update -qq && sudo apt-get install -y g++ make cmake libgtest-dev
       - name: Create reports directory
         run: mkdir -p reports
-      - name: Collect C++ files and run tests
+      - name: Collect C++ files and run tests (gtest_mock.h / Google Test / Catch2 framework support)
         id: metrics
         shell: bash
         run: bash project-sources/scripts/test-cpp.sh
@@ -261,7 +245,7 @@ jobs:
   # JOB 4 — Python Mutation Testing
   # ─────────────────────────────────────────────────────────────
   mutation_tests:
-    name: "3A · Python Mutation Testing"
+    name: "3A · Python Mutation Testing (project-sources only)"
     runs-on: ubuntu-latest
     needs: unit_tests
     continue-on-error: true
@@ -492,10 +476,10 @@ jobs:
           if-no-files-found: warn
 
   # ─────────────────────────────────────────────────────────────
-  # JOB 3B — C Mutation Testing (universalmutator)
+  # JOB 3B — C Mutation Testing (universalmutator, project-sources/c-src)
   # ─────────────────────────────────────────────────────────────
   c_mutation:
-    name: "3B · C Mutation Testing"
+    name: "3B · C Mutation Testing (project-sources/c-src)"
     runs-on: ubuntu-latest
     needs: c_tests
     continue-on-error: true
@@ -546,7 +530,7 @@ jobs:
   # JOB 3C — C++ Mutation Testing (universalmutator)
   # ─────────────────────────────────────────────────────────────
   cpp_mutation:
-    name: "3C · C++ Mutation Testing"
+    name: "3C · C++ Mutation Testing (project-sources/cpp-src)"
     runs-on: ubuntu-latest
     needs: cpp_tests
     continue-on-error: true

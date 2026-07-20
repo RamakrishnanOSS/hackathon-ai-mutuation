@@ -1,7 +1,14 @@
 #!/bin/bash
 #
 # Compile and run C++ tests
+# Supported Frameworks: gtest_mock.h (default), Google Test, Catch2, custom
 # Generates metrics: files, compile_pass, compile_fail, run_pass, run_fail
+#
+# Framework detection:
+#   - gtest_mock.h: Custom GoogleTest-compatible framework (default)
+#   - gtest/gtest.h: Official Google Test framework
+#   - catch_amalgamated.hpp: Catch2 testing framework
+#   - Custom: Any framework that respects exit codes (0=pass, non-zero=fail)
 #
 set +e
 
@@ -10,13 +17,25 @@ PROJECT_ROOT="${2:-.}"
 mkdir -p "$REPORT_DIR/cpp-sources"
 
 echo "[TEST-CPP] Collecting C++ source files..."
-find "$PROJECT_ROOT/project-sources/c-src" -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \) \
+find "$PROJECT_ROOT/project-sources/cpp-src" -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \) \
   2>/dev/null | while read f; do cp "$f" "$REPORT_DIR/cpp-sources/$(basename "$f")"; done
 
 echo "[TEST-CPP] Collecting C++ test file list..."
-find "$PROJECT_ROOT/project-sources/c-src/test" -type f \( -name 'test_*.cpp' -o -name 'test_*.cc' \) \
+find "$PROJECT_ROOT/project-sources/cpp-src/test" -type f \( -name 'test_*.cpp' -o -name 'test_*.cc' \) \
   | sort > "$REPORT_DIR/cpp-test-files.txt"
-echo "=== C++ test files ===" && cat "$REPORT_DIR/cpp-test-files.txt" || true
+
+echo "[TEST-CPP] Detecting test frameworks..."
+FRAMEWORK="gtest_mock.h"
+TEST_FILE=$(head -1 "$REPORT_DIR/cpp-test-files.txt" 2>/dev/null)
+if [ -n "$TEST_FILE" ] && grep -q '#include.*<gtest/gtest.h>' "$TEST_FILE" 2>/dev/null; then
+  FRAMEWORK="Google Test (libgtest)"
+elif [ -n "$TEST_FILE" ] && grep -q '#include.*catch_amalgamated.hpp' "$TEST_FILE" 2>/dev/null; then
+  FRAMEWORK="Catch2"
+elif [ -n "$TEST_FILE" ] && grep -q '#include.*gtest_mock.h' "$TEST_FILE" 2>/dev/null; then
+  FRAMEWORK="gtest_mock.h (custom)"
+fi
+echo "[TEST-CPP] Detected framework: $FRAMEWORK"
+echo "=== C++ test files (Framework: $FRAMEWORK) ===" && cat "$REPORT_DIR/cpp-test-files.txt" || true
 
 echo "[TEST-CPP] Compiling and running C++ tests..."
 LOG="$REPORT_DIR/cpp-build.log"; : > "$LOG"

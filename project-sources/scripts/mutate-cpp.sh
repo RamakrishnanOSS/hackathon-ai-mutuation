@@ -13,7 +13,7 @@ echo "[MUTATE-CPP] Running C++ mutation testing..."
 LOG="$REPORT_DIR/cpp-mutation.log"; : > "$LOG"
 KILLED=0; SURVIVED=0; TOTAL=0
 
-SRC_FILES=$(find "$PROJECT_ROOT/project-sources/c-src" -type f \( -name '*.cpp' -o -name '*.cc' \) \
+SRC_FILES=$(find "$PROJECT_ROOT/project-sources/cpp-src" -type f \( -name '*.cpp' -o -name '*.cc' \) \
   ! -name 'test_*' 2>/dev/null | sort)
 
 if [ -z "$SRC_FILES" ]; then

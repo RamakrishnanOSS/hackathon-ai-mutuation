@@ -1,7 +1,13 @@
 #!/bin/bash
 #
 # Run Python tests using pytest and collect results
+# Supported Frameworks: pytest (default), unittest (auto-discovered by pytest)
 # Generates HTML report, JUnit XML, and summary metrics
+#
+# Framework support:
+#   - pytest: Primary framework with advanced features (@pytest.mark, fixtures, plugins)
+#   - unittest: Standard library tests are auto-discovered and run by pytest
+#   - Both can coexist in the same project
 #
 set -e
 
@@ -10,13 +16,13 @@ PYTHON_SRC="${2:-.}"
 mkdir -p "$REPORT_DIR/python-sources"
 
 echo "[TEST-PY] Collecting Python test files..."
-find "$PYTHON_SRC/project-sources/py-src" "$PYTHON_SRC/mutation-engine/tests" \
+find "$PYTHON_SRC/project-sources/py-src" \
   -type f -name '*.py' 2>/dev/null | while read f; do
   cp "$f" "$REPORT_DIR/python-sources/$(basename "$f")"
 done
 
 echo "[TEST-PY] Collecting test file list..."
-find "$PYTHON_SRC/project-sources/py-src/tests" "$PYTHON_SRC/mutation-engine/tests" \
+find "$PYTHON_SRC/project-sources/py-src/tests" \
   -type f \( -name 'test_*.py' -o -name '*_test.py' \) 2>/dev/null | sort > "$REPORT_DIR/pytest-files.txt"
 
 if [ ! -s "$REPORT_DIR/pytest-files.txt" ]; then

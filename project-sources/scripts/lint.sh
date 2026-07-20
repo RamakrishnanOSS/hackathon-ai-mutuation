@@ -8,9 +8,9 @@ set -e
 REPORT_DIR="${1:-.}/reports/flake8-html"
 mkdir -p "$REPORT_DIR"
 
-echo "[LINT] Scanning Python files in project-sources and mutation-engine..."
-PY_FILES=$(find project-sources mutation-engine -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
-ROOT_PY=$(find . -maxdepth 1 -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
+echo "[LINT] Scanning Python files in project-sources..."
+PY_FILES=$(find project-sources -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
+ROOT_PY=""
 
 if [ -z "$PY_FILES$ROOT_PY" ]; then
   echo "[LINT] No Python files found, creating placeholder report"

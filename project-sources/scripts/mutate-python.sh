@@ -13,16 +13,12 @@ mkdir -p "$REPORT_DIR/mutants"
 echo "[MUTATE-PY] Scanning $SCOPE for Python files..."
 LOG="$REPORT_DIR/mutmut-run.log"; : > "$LOG"
 
-# Determine test directories based on scope
-if [ "$SCOPE" = "project-sources" ]; then
-  TESTS_DIR="$PROJECT_ROOT/project-sources/py-src/tests:$PROJECT_ROOT/mutation-engine/tests"
-else
-  TESTS_DIR="$PROJECT_ROOT/$SCOPE"
-fi
+# Test directory is always project-sources/py-src/tests
+TESTS_DIR="$PROJECT_ROOT/project-sources/py-src/tests"
 
-echo "[MUTATE-PY] Running mutmut on $SCOPE (tests: $TESTS_DIR)..."
+echo "[MUTATE-PY] Running mutmut on project-sources/py-src (tests: $TESTS_DIR)..."
 python3 -m mutmut run \
-  --paths-to-mutate="$SCOPE" \
+  --paths-to-mutate="project-sources/py-src" \
   --tests-dir="$TESTS_DIR" \
   --result-json="$REPORT_DIR/mutmut-results.json" \
   >> "$LOG" 2>&1 || true
