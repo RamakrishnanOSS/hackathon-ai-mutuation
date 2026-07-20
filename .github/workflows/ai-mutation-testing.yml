@@ -177,7 +177,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y gcc g++ make cmake libcheck-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y gcc g++ make cmake check
       - name: Create reports directory
         run: mkdir -p reports
       - name: Collect C files and run tests (assert.h / Check framework support)

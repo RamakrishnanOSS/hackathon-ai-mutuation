@@ -64,4 +64,6 @@ jobs:
           cache-to: type=gha,scope=${{ github.workflow }},mode=max
 
       - name: Image digest
-        run: echo "Built image with digest: ${{ steps.meta.outputs.tags }}"
+        run: |
+          echo "Image built successfully."
+          echo "Tags: ${{ steps.meta.outputs.version }}"

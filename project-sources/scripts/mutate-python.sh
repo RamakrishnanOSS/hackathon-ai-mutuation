@@ -5,28 +5,34 @@
 #
 set -e
 
+_log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [MUTATE-PY] $*"; }
+
 SCOPE="${1:-project-sources}"
 REPORT_DIR="${2:-.}/reports"
 PROJECT_ROOT="${3:-.}"
 mkdir -p "$REPORT_DIR/mutants"
 
-echo "[MUTATE-PY] Scanning $SCOPE for Python files..."
+_log "Scanning project-sources/py-src for Python files..."
 LOG="$REPORT_DIR/mutmut-run.log"; : > "$LOG"
 
-# Test directory is always project-sources/py-src/tests
 TESTS_DIR="$PROJECT_ROOT/project-sources/py-src/tests"
 
-echo "[MUTATE-PY] Running mutmut on project-sources/py-src (tests: $TESTS_DIR)..."
+if [ ! -d "$TESTS_DIR" ]; then
+  echo "::error::[MUTATE-PY] Tests directory not found: $TESTS_DIR" >&2
+  exit 1
+fi
+
+_log "Running mutmut (tests: $TESTS_DIR)..."
 python3 -m mutmut run \
   --paths-to-mutate="project-sources/py-src" \
   --tests-dir="$TESTS_DIR" \
   --result-json="$REPORT_DIR/mutmut-results.json" \
   >> "$LOG" 2>&1 || true
 
-echo "[MUTATE-PY] Generating results..."
+_log "Generating results..."
 python3 -m mutmut results --json >> "$REPORT_DIR/mutmut-results.log" 2>&1 || true
 
-echo "[MUTATE-PY] Parsing mutation metrics..."
+_log "Parsing mutation metrics..."
 python3 << 'PY'
 import re, os
 from pathlib import Path
@@ -49,7 +55,9 @@ if killed == 0 and survived == 0:
         for pat, key in [
             (r"(\d+)\s+killed", "killed"), (r"(\d+)\s+survived", "survived"),
             (r"(\d+)\s+timed?\s*out", "timeout"),
-            (r"🎉\s*(\d+)", "killed"), (r"🙁\s*(\d+)", "survived"), (r"⏰\s*(\d+)", "timeout"),
+            (r"\U0001f389\s*(\d+)", "killed"),
+            (r"\U0001f641\s*(\d+)", "survived"),
+            (r"\u23f0\s*(\d+)", "timeout"),
         ]:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
@@ -61,10 +69,12 @@ if killed == 0 and survived == 0:
 total = killed + survived + timeout
 score = round((killed / total) * 100, 2) if total > 0 else 0.0
 
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-    f.write(f"killed={killed}\nsurvived={survived}\ntimeout={timeout}\n")
-    f.write(f"total_mutants={total}\nmutation_score={score}\n")
-print(f"Python mutation — killed={killed} survived={survived} timeout={timeout} total={total} score={score}%")
+gh_output = os.environ.get("GITHUB_OUTPUT")
+if gh_output:
+    with open(gh_output, "a", encoding="utf-8") as f:
+        f.write(f"killed={killed}\nsurvived={survived}\ntimeout={timeout}\n")
+        f.write(f"total_mutants={total}\nmutation_score={score}\n")
+print(f"[MUTATE-PY] killed={killed} survived={survived} timeout={timeout} total={total} score={score}%")
 PY
 
-echo "[MUTATE-PY] Mutation testing complete"
+_log "Mutation testing complete"

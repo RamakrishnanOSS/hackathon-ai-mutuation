@@ -4,50 +4,64 @@
 # Supported Frameworks: pytest (default), unittest (auto-discovered by pytest)
 # Generates HTML report, JUnit XML, and summary metrics
 #
-# Framework support:
-#   - pytest: Primary framework with advanced features (@pytest.mark, fixtures, plugins)
-#   - unittest: Standard library tests are auto-discovered and run by pytest
-#   - Both can coexist in the same project
-#
 set -e
 
+_log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [TEST-PY] $*"; }
+
 REPORT_DIR="${1:-.}/reports"
+export REPORT_DIR                  # export so Python subprocess can read it
 PYTHON_SRC="${2:-.}"
 mkdir -p "$REPORT_DIR/python-sources"
 
-echo "[TEST-PY] Collecting Python test files..."
+_log "Collecting Python test files..."
 find "$PYTHON_SRC/project-sources/py-src" \
   -type f -name '*.py' 2>/dev/null | while read f; do
   cp "$f" "$REPORT_DIR/python-sources/$(basename "$f")"
 done
 
-echo "[TEST-PY] Collecting test file list..."
+_log "Collecting test file list..."
 find "$PYTHON_SRC/project-sources/py-src/tests" \
   -type f \( -name 'test_*.py' -o -name '*_test.py' \) 2>/dev/null | sort > "$REPORT_DIR/pytest-files.txt"
 
 if [ ! -s "$REPORT_DIR/pytest-files.txt" ]; then
-  echo "[TEST-PY] No test files found, skipping pytest"
-  exit 0
+  echo "::error::[TEST-PY] No test files discovered in project-sources/py-src/tests/" >&2
+  echo "::error::Ensure test files follow naming convention: test_*.py or *_test.py" >&2
+  exit 1
 fi
 
-echo "[TEST-PY] Running pytest with HTML and JUnit output..."
+NTEST=$(wc -l < "$REPORT_DIR/pytest-files.txt")
+_log "Discovered $NTEST test file(s)."
+
+# ── Step 1: JUnit XML only (primary — no extra plugins needed) ────────────
+_log "Running pytest for metrics (JUnit XML)..."
 python3 -m pytest \
-  --html="$REPORT_DIR/pytest-report.html" --self-contained-html \
-  --junit-xml="$REPORT_DIR/pytest-junit-report.html" \
+  --junit-xml="$REPORT_DIR/pytest-junit-report.xml" \
   -v --tb=short \
   $(cat "$REPORT_DIR/pytest-files.txt" | tr '\n' ' ') \
   2>&1 | tee "$REPORT_DIR/pytest-run.log" || true
 
-echo "[TEST-PY] Parsing JUnit results for metrics..."
+# ── Step 2: HTML report (optional — requires pytest-html) ─────────────────
+if python3 -c "import pytest_html" 2>/dev/null; then
+  _log "Generating HTML report (pytest-html available)..."
+  python3 -m pytest \
+    --html="$REPORT_DIR/pytest-report.html" --self-contained-html \
+    --no-header -q \
+    $(cat "$REPORT_DIR/pytest-files.txt" | tr '\n' ' ') \
+    2>/dev/null || true
+else
+  _log "WARNING: pytest-html not installed, skipping HTML report generation"
+fi
+
+# ── Step 3: Parse JUnit XML and write metrics to GITHUB_OUTPUT ───────────
+_log "Parsing JUnit results for metrics..."
 python3 << 'PY'
 import xml.etree.ElementTree as ET
 import os
 from pathlib import Path
 
 total = passed = failed = errors = skipped = 0
-junit_file = Path(os.environ.get("REPORT_DIR", "reports")) / "pytest-junit-report.html"
-if junit_file.with_suffix(".xml").exists():
-    junit_file = junit_file.with_suffix(".xml")
+report_dir = os.environ.get("REPORT_DIR", "reports")
+junit_file = Path(report_dir) / "pytest-junit-report.xml"
 
 if junit_file.exists():
     try:
@@ -58,13 +72,23 @@ if junit_file.exists():
             failed  += int(suite.attrib.get("failures", 0))
             errors  += int(suite.attrib.get("errors",   0))
             skipped += int(suite.attrib.get("skipped",  0))
-    except Exception as e:
-        print(f"Warning: Could not parse JUnit: {e}")
+        print(f"JUnit XML parsed: {junit_file}")
+    except Exception as exc:
+        print(f"WARNING: Could not parse JUnit XML ({junit_file}): {exc}")
+else:
+    print(f"WARNING: JUnit XML not found at {junit_file} — metrics will be zero")
 
 passed = max(total - failed - errors - skipped, 0)
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-    f.write(f"total={total}\npassed={passed}\nfailed={failed}\nerrors={errors}\nskipped={skipped}\n")
-print(f"pytest: total={total} passed={passed} failed={failed}")
+
+# Write to GITHUB_OUTPUT (GitHub Actions) or stdout (local)
+gh_output = os.environ.get("GITHUB_OUTPUT")
+if gh_output:
+    with open(gh_output, "a", encoding="utf-8") as fh:
+        fh.write(f"total={total}\npassed={passed}\nfailed={failed}\nerrors={errors}\nskipped={skipped}\n")
+else:
+    print("(local run — GITHUB_OUTPUT not set, metrics not written to step outputs)")
+
+print(f"pytest: total={total} passed={passed} failed={failed} errors={errors} skipped={skipped}")
 PY
 
-echo "[TEST-PY] Pytest complete"
+_log "Pytest complete"
