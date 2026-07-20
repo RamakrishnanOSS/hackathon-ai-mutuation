@@ -1,0 +1,361 @@
+name: AI Mutation Testing (Containerized)
+
+run-name: >-
+  AI Mutation Testing (${{ github.event_name == 'workflow_dispatch' &&
+  format('manual | branch={0} | scope={1} | langs={2}', inputs.target_branch, inputs.mutation_scope, inputs.mutation_languages) ||
+  github.ref_name }})
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - feature/**
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch to run"
+        required: true
+        type: choice
+        default: main
+        options:
+          - main
+          - develop
+      mutation_scope:
+        description: "Folder to scan for mutation targets"
+        required: true
+        type: string
+        default: project-sources
+      mutation_languages:
+        description: "Languages to run mutation testing on"
+        required: true
+        type: choice
+        default: "all"
+        options:
+          - all
+          - python
+          - c
+          - cpp
+          - python,c
+          - python,cpp
+          - c,cpp
+      run_c_tests:
+        description: "Run C compile & test job"
+        required: false
+        type: boolean
+        default: true
+      run_cpp_tests:
+        description: "Run C++ compile & test job"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  IMAGE_TAG: mutation-testing:latest
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Build Docker image with GHA cache (no push to registry)
+  # ─────────────────────────────────────────────────────────────
+  build-image:
+    name: "Build Docker Image"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and load Docker image (GHA cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./project-sources/.devcontainer
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 1 — Lint (in container)
+  # ─────────────────────────────────────────────────────────────
+  lint:
+    name: "1 · Lint (Non-Blocking)"
+    runs-on: ubuntu-latest
+    needs: build-image
+    continue-on-error: true
+    container:
+      image: ${{ env.IMAGE_TAG }}
+      options: -v /tmp:/tmp
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run linting (project-sources only)
+        run: bash project-sources/scripts/lint.sh
+
+      - name: Upload flake8 report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: flake8-html
+          path: reports/flake8-html/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2A — Python Unit Tests (in container)
+  # ─────────────────────────────────────────────────────────────
+  python-tests:
+    name: "2A · Python Unit Tests"
+    runs-on: ubuntu-latest
+    needs: build-image
+    continue-on-error: true
+    container:
+      image: ${{ env.IMAGE_TAG }}
+      options: -v /tmp:/tmp
+    outputs:
+      total: ${{ steps.metrics.outputs.total }}
+      passed: ${{ steps.metrics.outputs.passed }}
+      failed: ${{ steps.metrics.outputs.failed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Python tests (pytest + unittest framework support)
+        id: metrics
+        run: bash project-sources/scripts/test-python.sh
+
+      - name: Upload pytest artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: python-test-results
+          path: |
+            reports/pytest-report.html
+            reports/pytest-files.txt
+            reports/python-sources/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2B — C Compile & Test (in container)
+  # ─────────────────────────────────────────────────────────────
+  c-tests:
+    name: "2B · C Compile & Test (project-sources/c-src)"
+    runs-on: ubuntu-latest
+    needs: build-image
+    continue-on-error: true
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_c_tests) }}
+    container:
+      image: ${{ env.IMAGE_TAG }}
+      options: -v /tmp:/tmp
+    outputs:
+      files: ${{ steps.metrics.outputs.files }}
+      compile_pass: ${{ steps.metrics.outputs.compile_pass }}
+      compile_fail: ${{ steps.metrics.outputs.compile_fail }}
+      run_pass: ${{ steps.metrics.outputs.run_pass }}
+      run_fail: ${{ steps.metrics.outputs.run_fail }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run C tests (assert.h / Check framework support)
+        id: metrics
+        run: bash project-sources/scripts/test-c.sh
+
+      - name: Upload C artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: c-test-results
+          path: |
+            reports/c-build.log
+            reports/c-test-files.txt
+            reports/c-sources/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2C — C++ Compile & Test (in container)
+  # ─────────────────────────────────────────────────────────────
+  cpp-tests:
+    name: "2C · C++ Compile & Test (project-sources/cpp-src)"
+    runs-on: ubuntu-latest
+    needs: build-image
+    continue-on-error: true
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_cpp_tests) }}
+    container:
+      image: ${{ env.IMAGE_TAG }}
+      options: -v /tmp:/tmp
+    outputs:
+      files: ${{ steps.metrics.outputs.files }}
+      compile_pass: ${{ steps.metrics.outputs.compile_pass }}
+      compile_fail: ${{ steps.metrics.outputs.compile_fail }}
+      run_pass: ${{ steps.metrics.outputs.run_pass }}
+      run_fail: ${{ steps.metrics.outputs.run_fail }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run C++ tests (gtest_mock.h / Google Test / Catch2 framework support)
+        id: metrics
+        run: bash project-sources/scripts/test-cpp.sh
+
+      - name: Upload C++ artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp-test-results
+          path: |
+            reports/cpp-build.log
+            reports/cpp-test-files.txt
+            reports/cpp-sources/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 3B — C Mutation Testing (in container)
+  # ─────────────────────────────────────────────────────────────
+  c-mutation:
+    name: "3B · C Mutation Testing (project-sources/c-src)"
+    runs-on: ubuntu-latest
+    needs: c-tests
+    continue-on-error: true
+    if: >-
+      ${{
+        always() && (
+          github.event_name != 'workflow_dispatch' ||
+          inputs.mutation_languages == 'all' ||
+          contains(inputs.mutation_languages, 'c')
+        ) && (github.event_name != 'workflow_dispatch' || inputs.run_c_tests)
+      }}
+    container:
+      image: ${{ env.IMAGE_TAG }}
+      options: -v /tmp:/tmp
+    outputs:
+      killed: ${{ steps.metrics.outputs.killed }}
+      survived: ${{ steps.metrics.outputs.survived }}
+      total: ${{ steps.metrics.outputs.total }}
+      score: ${{ steps.metrics.outputs.score }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run C mutation testing (project-sources/c-src only)
+        id: metrics
+        run: bash project-sources/scripts/mutate-c.sh
+
+      - name: Upload C mutation artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: c-mutation-results
+          path: |
+            reports/c-mutation.log
+            reports/c-mutants/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 3C — C++ Mutation Testing (in container)
+  # ─────────────────────────────────────────────────────────────
+  cpp-mutation:
+    name: "3C · C++ Mutation Testing (project-sources/cpp-src)"
+    runs-on: ubuntu-latest
+    needs: cpp-tests
+    continue-on-error: true
+    if: >-
+      ${{
+        always() && (
+          github.event_name != 'workflow_dispatch' ||
+          inputs.mutation_languages == 'all' ||
+          contains(inputs.mutation_languages, 'cpp')
+        ) && (github.event_name != 'workflow_dispatch' || inputs.run_cpp_tests)
+      }}
+    container:
+      image: ${{ env.IMAGE_TAG }}
+      options: -v /tmp:/tmp
+    outputs:
+      killed: ${{ steps.metrics.outputs.killed }}
+      survived: ${{ steps.metrics.outputs.survived }}
+      total: ${{ steps.metrics.outputs.total }}
+      score: ${{ steps.metrics.outputs.score }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run C++ mutation testing (project-sources/c-src only)
+        id: metrics
+        run: bash project-sources/scripts/mutate-cpp.sh
+
+      - name: Upload C++ mutation artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp-mutation-results
+          path: |
+            reports/cpp-mutation.log
+            reports/cpp-mutants/
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────
+  # Summary Job — Report Results
+  # ─────────────────────────────────────────────────────────────
+  summary:
+    name: "Summary"
+    runs-on: ubuntu-latest
+    needs: [python-tests, c-tests, cpp-tests, c-mutation, cpp-mutation]
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Test Results Summary
+        run: |
+          echo "# 🧬 Mutation Testing Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Python Tests" >> $GITHUB_STEP_SUMMARY
+          echo "- Total: ${{ needs.python-tests.outputs.total || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Passed: ${{ needs.python-tests.outputs.passed || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Failed: ${{ needs.python-tests.outputs.failed || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## C Tests" >> $GITHUB_STEP_SUMMARY
+          echo "- Files: ${{ needs.c-tests.outputs.files || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Compile Pass: ${{ needs.c-tests.outputs.compile_pass || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Compile Fail: ${{ needs.c-tests.outputs.compile_fail || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## C++ Tests" >> $GITHUB_STEP_SUMMARY
+          echo "- Files: ${{ needs.cpp-tests.outputs.files || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Compile Pass: ${{ needs.cpp-tests.outputs.compile_pass || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Compile Fail: ${{ needs.cpp-tests.outputs.compile_fail || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## C Mutation" >> $GITHUB_STEP_SUMMARY
+          echo "- Killed: ${{ needs.c-mutation.outputs.killed || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Survived: ${{ needs.c-mutation.outputs.survived || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Score: ${{ needs.c-mutation.outputs.score || 'N/A' }}%" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## C++ Mutation" >> $GITHUB_STEP_SUMMARY
+          echo "- Killed: ${{ needs.cpp-mutation.outputs.killed || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Survived: ${{ needs.cpp-mutation.outputs.survived || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Score: ${{ needs.cpp-mutation.outputs.score || 'N/A' }}%" >> $GITHUB_STEP_SUMMARY

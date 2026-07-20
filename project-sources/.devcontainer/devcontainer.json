@@ -1,0 +1,102 @@
+// ────────────────────────────────────────────────────────────────
+// AI Mutation Testing — Dev Container Configuration (project-sources workspace)
+// Opens project-sources/ as the VS Code workspace root.
+// Python 3.11 + Node 20 + g++ are provided by the custom Dockerfile.
+//
+// Features:
+//   - Dockerfile.core integrated as "core-service" in docker-compose.yml
+//   - Services: devcontainer (dev env) + core-service (FastAPI mutation engine)
+//   - Port forwarding: 8001 (FastAPI), 3000 (Grafana), 9090 (Prometheus)
+//
+// Extension workflow:
+//   Build (host only, run once before opening the devcontainer, from repo root):
+//     bash vscode-extension-scripts/build-extension.sh
+//   The resulting .vsix is committed to .devcontainer/ and installed
+//   automatically on every attach via postAttachCommand.
+//
+// Lifecycle hooks:
+//   postAttachCommand – installs the pre-built .vsix into VS Code Server.
+// ────────────────────────────────────────────────────────────────
+{
+  "name": "AI Mutation Testing",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "devcontainer",
+  "workspaceFolder": "/workspace",
+
+  // ── Features ────────────────────────────────────────────────
+  //
+  // Dockerfile.core is integrated via docker-compose.yml as the "core-service".
+  // The devcontainer image itself (project-sources/.devcontainer/Dockerfile) includes:
+  //   - Python 3.11, Node 20, build-essential, g++, gcc, cmake, make
+  //   - Git, curl, jq, and pip dependencies from requirements.txt
+  //
+  // The core-service (built from mutation-engine/Dockerfile.core) provides:
+  //   - Python 3.11 with FastAPI for the mutation engine
+  //   - g++, gcc, cmake, make for C/C++ mutation test execution
+  //   - Accessible at http://core-service:8000 (within Docker network)
+  //   - Accessible at http://localhost:8001 (from host machine)
+  //
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:4.0.0": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  // Companion extensions auto-installed from the marketplace.
+  // The local AI Mutation Tester extension is installed via postAttachCommand.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-vscode.cpptools",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "mutationTesting.coreServiceUrl": "http://core-service:8000",
+        "mutationTesting.grafanaUrl": "http://grafana:3000",
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+
+  // ── Lifecycle hooks ──────────────────────────────────────────
+
+  // Runs every time VS Code attaches to the container.
+  // Strips CRLF from the install script (safe no-op on LF files), then
+  // extracts the pre-built .vsix from .devcontainer/ into VS Code Server.
+  // To rebuild the .vsix on the host: bash vscode-extension-scripts/build-extension.sh (from repo root)
+  "postAttachCommand": "sed -i 's/\r$//' /workspace/.devcontainer/install-extension.sh && bash /workspace/.devcontainer/install-extension.sh",
+
+  // ── Environment ────────────────────────────────────────────
+
+  // Forward host API keys into the container (set them in your shell or .env).
+  // Never hard-code secrets here.
+  "remoteEnv": {
+    "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}",
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}"
+  },
+
+  // ── Port forwarding ───────────────────────────────────────
+
+  "forwardPorts": [8001, 3000, 9090],
+  "portsAttributes": {
+    "8001": {
+      "label": "Core Mutation Service (FastAPI)",
+      "onAutoForward": "silent"
+    },
+    "3000": {
+      "label": "Grafana Dashboard",
+      "onAutoForward": "notify"
+    },
+    "9090": {
+      "label": "Prometheus Metrics",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "remoteUser": "vscode"
+}

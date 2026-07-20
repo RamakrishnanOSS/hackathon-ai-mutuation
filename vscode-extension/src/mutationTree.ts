@@ -54,6 +54,11 @@ export class MutationTreeDataProvider implements vscode.TreeDataProvider<MutantT
   private baselineTests: any[] = [];
   private mutants: any[] = [];
   private executionRuns: any[] = [];
+  
+  // ── Developer Context (captured from user input) ───────────
+  private developerInstructions: string = "";
+  private focusArea: string = "";
+  private testStrategy: string = "";
 
   constructor() {}
 
@@ -62,6 +67,22 @@ export class MutationTreeDataProvider implements vscode.TreeDataProvider<MutantT
     if (data.mutants !== undefined) { this.mutants = data.mutants; }
     if (data.runs !== undefined) { this.executionRuns = data.runs; }
     this._onDidChangeTreeData.fire();
+  }
+
+  // ── Methods to update developer context ──────────────────
+  setDeveloperContext(instructions: string, focusArea: string, testStrategy: string): void {
+    this.developerInstructions = instructions;
+    this.focusArea = focusArea;
+    this.testStrategy = testStrategy;
+    this._onDidChangeTreeData.fire();
+  }
+
+  getDeveloperContext(): { instructions: string; focusArea: string; testStrategy: string } {
+    return {
+      instructions: this.developerInstructions,
+      focusArea: this.focusArea,
+      testStrategy: this.testStrategy
+    };
   }
 
   getTreeItem(element: MutantTreeItem): vscode.TreeItem {
@@ -74,6 +95,30 @@ export class MutationTreeDataProvider implements vscode.TreeDataProvider<MutantT
       // Root Node Categorized Sections
       // ══════════════════════════════════════════════════════════════
       const sections: MutantTreeItem[] = [];
+
+      // Section 0: Developer Context (NEW!)
+      const contextParts: string[] = [];
+      if (this.developerInstructions) {
+        contextParts.push(`📝 Instructions: "${this.developerInstructions.substring(0, 40)}${this.developerInstructions.length > 40 ? '...' : ''}"`);
+      }
+      if (this.focusArea) {
+        contextParts.push(`🎯 Focus: ${this.focusArea}`);
+      }
+      if (this.testStrategy) {
+        contextParts.push(`📊 Strategy: ${this.testStrategy}`);
+      }
+      
+      const contextStatus = contextParts.length > 0 
+        ? contextParts.join(" • ")
+        : "No context set";
+      sections.push(new MutantTreeItem(
+        `⚙️ Developer Context: [${contextStatus}]`,
+        'SECTION_HEADER',
+        undefined,
+        vscode.TreeItemCollapsibleState.Expanded,
+        undefined,
+        'context_category'
+      ));
 
       // Section 1: Baseline Tests
       const baselineStatus = this.baselineTests.length > 0 
@@ -124,6 +169,50 @@ export class MutationTreeDataProvider implements vscode.TreeDataProvider<MutantT
     // Child Categories Expansion Routing
     // ══════════════════════════════════════════════════════════════
     const categoryType = element.typeKey;
+
+    if (categoryType === 'context_category') {
+      const contextItems: MutantTreeItem[] = [];
+      
+      if (this.developerInstructions) {
+        contextItems.push(new MutantTreeItem(
+          `📝 Instructions: ${this.developerInstructions}`,
+          'INFO',
+          undefined,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          'context_instructions'
+        ));
+      }
+      if (this.focusArea) {
+        contextItems.push(new MutantTreeItem(
+          `🎯 Focus Area: ${this.focusArea}`,
+          'INFO',
+          undefined,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          'context_focus'
+        ));
+      }
+      if (this.testStrategy) {
+        contextItems.push(new MutantTreeItem(
+          `📊 Test Strategy: ${this.testStrategy}`,
+          'INFO',
+          undefined,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          'context_strategy'
+        ));
+      }
+      
+      if (contextItems.length === 0) {
+        contextItems.push(new MutantTreeItem(
+          '⚡ No context set. Configure developer instructions to guide mutation generation.',
+          'INFO'
+        ));
+      }
+      
+      return Promise.resolve(contextItems);
+    }
 
     if (categoryType === 'baseline_category') {
       if (this.baselineTests.length === 0) {

@@ -1,4 +1,8 @@
 {
+  "repository": {
+    "type": "git",
+    "url": "/home/per9kor/hack/hackathon-ai-mutuation"
+  },
   "dependencies": {
     "@vscode/vsce": "^3.9.2"
   }

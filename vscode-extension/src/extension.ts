@@ -58,6 +58,32 @@ function normalizeWorkspacePath(workspaceRoot: string, filePath: string): string
   return normalized.replace(/^\.\//, '');
 }
 
+function normalizeTargetPathForProject(workspaceRoot: string, projectRoot: string, filePath: string): string {
+  const normalizedInput = (filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalizedInput) {
+    return normalizedInput;
+  }
+
+  const absoluteCandidate = path.isAbsolute(normalizedInput)
+    ? normalizedInput
+    : path.resolve(workspaceRoot, normalizedInput);
+  const projectAbs = path.resolve(projectRoot);
+
+  const relToProject = path.relative(projectAbs, absoluteCandidate).replace(/\\/g, '/');
+  if (relToProject && !relToProject.startsWith('..')) {
+    return relToProject.replace(/^\.\//, '');
+  }
+
+  // If a workspace-relative path includes the project root folder name prefix,
+  // strip it to avoid duplicating segments when backend joins with projectPath.
+  const projectFolderName = path.basename(projectAbs).replace(/\\/g, '/');
+  if (normalizedInput.startsWith(`${projectFolderName}/`)) {
+    return normalizedInput.substring(projectFolderName.length + 1);
+  }
+
+  return normalizedInput;
+}
+
 function currentEditorMutants(editor: vscode.TextEditor): any[] {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceRoot) {
@@ -331,6 +357,163 @@ export function activate(context: vscode.ExtensionContext) {
 
   outputChannel.appendLine("AI Mutation Testing Extension is active.");
 
+  // ── Project and build system context (for multi-project support) ──
+  let projectPath: string = "";
+  let buildSystem: string = "auto";
+
+  // ── Developer instructions context (captured before generating mutations) ──
+  let developerInstructions: string = "";
+  let focusArea: string = "";
+  let testStrategy: string = "";
+  let contextOperators: string[] = [
+    "relational_operator_replacement",
+    "arithmetic_substitution",
+    "boundary_value_tweak",
+    "boolean_inversion",
+    "return_value_stripping"
+  ];
+
+  // ══════════════════════════════════════════════════════════════
+  // Command 0: Integrated Mutation Configuration Wizard
+  // Steps: Project Selection → Operator Types → Developer Instructions → Focus Area → Test Strategy
+  // ══════════════════════════════════════════════════════════════
+
+  // Backward-compat stubs so any external callers of the old commands still work
+  let setDeveloperInstructions = vscode.commands.registerCommand('mutation.setDeveloperInstructions', async () => {
+    vscode.commands.executeCommand('mutation.configureMutationFlow');
+  });
+  let setFocusArea = vscode.commands.registerCommand('mutation.setFocusArea', async () => {
+    vscode.commands.executeCommand('mutation.configureMutationFlow');
+  });
+  let setTestStrategy = vscode.commands.registerCommand('mutation.setTestStrategy', async () => {
+    vscode.commands.executeCommand('mutation.configureMutationFlow');
+  });
+
+  let configureMutationFlow = vscode.commands.registerCommand('mutation.configureMutationFlow', async () => {
+    const TOTAL_STEPS = 5;
+
+    // ── Step 0: Project Selection ───────────────────────────────
+    const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!wsDir) {
+      vscode.window.showErrorMessage("Open a workspace folder to configure mutations.");
+      return;
+    }
+
+    const projectOptions = [
+      { label: "Python Project (py-src)", description: "Python example project with pytest", value: "py-src" },
+      { label: "C/C++ Project (c-src)",   description: "C/C++ example project with CMake", value: "c-src" },
+      { label: "Custom Project Path",    description: "Select a custom project directory",    value: "custom" }
+    ];
+    const chosenProject = await vscode.window.showQuickPick(projectOptions, {
+      placeHolder: "Select project or workspace to mutate",
+      title: `(0/${TOTAL_STEPS}) Project Selection`
+    });
+    if (chosenProject === undefined) { return; }
+
+    let selectedProjectPath = wsDir;
+    let detectedBuildSystem = "auto";
+
+    if (chosenProject.value === "py-src" || chosenProject.value === "c-src") {
+      selectedProjectPath = path.join(wsDir, 'project-sources', chosenProject.value);
+    } else if (chosenProject.value === "custom") {
+      const customPath = await vscode.window.showInputBox({
+        value: wsDir,
+        placeHolder: "e.g., /path/to/project or relative/path/to/project",
+        prompt: "Enter project path (absolute or relative to workspace)",
+        title: `(0/${TOTAL_STEPS}) Custom Project Path`
+      });
+      if (customPath === undefined) { return; }
+      selectedProjectPath = customPath;
+    }
+
+    projectPath = selectedProjectPath;
+    outputChannel.appendLine(`📁 Selected project: ${projectPath}`);
+
+    // ── Step 1: Mutation Operator Types ────────────────────────
+    const operatorOptions = [
+      { label: "Relational Operator Replacement", description: "Swap relational operators (< <= >= > == !=", value: "relational_operator_replacement", picked: contextOperators.includes("relational_operator_replacement") },
+      { label: "Arithmetic Substitution",         description: "Swap arithmetic operators (+ - * /)",           value: "arithmetic_substitution",         picked: contextOperators.includes("arithmetic_substitution") },
+      { label: "Boundary Value Tweaks",           description: "Adjust numeric boundary literals (e.g. 10→11)",  value: "boundary_value_tweak",             picked: contextOperators.includes("boundary_value_tweak") },
+      { label: "Boolean Inversion",               description: "Invert logical connectors/literals (and↔or)",    value: "boolean_inversion",               picked: contextOperators.includes("boolean_inversion") },
+      { label: "Return Value Stripping",          description: "Strip or neutralize explicit return expressions", value: "return_value_stripping",           picked: contextOperators.includes("return_value_stripping") }
+    ];
+    const chosenOps = await vscode.window.showQuickPick(operatorOptions, {
+      canPickMany: true,
+      placeHolder: "Select mutation operator types to enable",
+      title: `(1/${TOTAL_STEPS}) Mutation Operator Types`
+    });
+    if (chosenOps === undefined) { return; }
+    contextOperators = chosenOps.length > 0
+      ? chosenOps.map(op => op.value)
+      : ["relational_operator_replacement", "arithmetic_substitution", "boundary_value_tweak", "boolean_inversion", "return_value_stripping"];
+
+    // ── Step 2: Developer Instructions ─────────────────────────
+    const instructions = await vscode.window.showInputBox({
+      value: developerInstructions,
+      placeHolder: "e.g., Focus on boundary conditions, edge cases with array indices…",
+      prompt: "Free-text guidance for the AI mutation engine (leave blank to skip)",
+      title: `(2/${TOTAL_STEPS}) Developer Instructions`
+    });
+    if (instructions === undefined) { return; }
+    developerInstructions = instructions;
+
+    // ── Step 3: Focus Area ──────────────────────────────────────
+    const focusOptions = [
+      { label: "Edge Cases",    description: "Boundary conditions and edge cases",             picked: focusArea === "Edge Cases" },
+      { label: "Performance",   description: "Mutations testing performance implications",      picked: focusArea === "Performance" },
+      { label: "Logic",         description: "Logical operators and conditionals",               picked: focusArea === "Logic" },
+      { label: "Return Values", description: "Mutations involving return value modifications",  picked: focusArea === "Return Values" },
+      { label: "All",           description: "Generate all types of mutations",                 picked: focusArea === "All" || focusArea === "" }
+    ];
+    const chosenFocus = await vscode.window.showQuickPick(focusOptions, {
+      placeHolder: "Select a mutation focus area",
+      title: `(3/${TOTAL_STEPS}) Focus Area`
+    });
+    if (chosenFocus === undefined) { return; }
+    focusArea = chosenFocus.label;
+
+    // ── Step 4: Test Strategy ───────────────────────────────────
+    const strategyOptions = [
+      { label: "Branch Coverage",    description: "Mutations targeting branch coverage",      picked: testStrategy === "Branch Coverage" },
+      { label: "Statement Coverage", description: "Mutations for statement coverage",         picked: testStrategy === "Statement Coverage" },
+      { label: "Path Coverage",      description: "Mutations for path coverage",              picked: testStrategy === "Path Coverage" },
+      { label: "Comprehensive",      description: "Comprehensive mutation testing strategy",  picked: testStrategy === "Comprehensive" || testStrategy === "" }
+    ];
+    const chosenStrategy = await vscode.window.showQuickPick(strategyOptions, {
+      placeHolder: "Select a test strategy",
+      title: `(4/${TOTAL_STEPS}) Test Strategy`
+    });
+    if (chosenStrategy === undefined) { return; }
+    testStrategy = chosenStrategy.label;
+
+    treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
+    outputChannel.appendLine(`⚙️ Mutation context configured:`);
+    outputChannel.appendLine(`   • Operators:     ${contextOperators.join(', ')}`);
+    outputChannel.appendLine(`   • Instructions:  ${developerInstructions || '(none)'}`);
+    outputChannel.appendLine(`   • Focus Area:    ${focusArea}`);
+    outputChannel.appendLine(`   • Test Strategy: ${testStrategy}`);
+    vscode.window.showInformationMessage(
+      `Mutation context saved — Operators: ${contextOperators.length}, Focus: ${focusArea}, Strategy: ${testStrategy}`
+    );
+  });
+
+  // Clear all developer context
+  let clearDeveloperContext = vscode.commands.registerCommand('mutation.clearDeveloperContext', async () => {
+    developerInstructions = "";
+    focusArea = "";
+    testStrategy = "";
+    contextOperators = [
+      "relational_operator_replacement",
+      "arithmetic_substitution",
+      "boundary_value_tweak",
+      "boolean_inversion",
+      "return_value_stripping"
+    ];
+    treeDataProvider.setDeveloperContext("", "", "");
+    outputChannel.appendLine(`🗑️ All developer context cleared.`);
+    vscode.window.showInformationMessage(`Developer context cleared.`);
+  });
+
   // ══════════════════════════════════════════════════════════════
   // Command 1: Run Baseline Tests
   // ══════════════════════════════════════════════════════════════
@@ -342,6 +525,9 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
+    // Use selected project path if available, otherwise fall back to workspace
+    const activeProjectPath = projectPath || wsDir;
+
     const activeYaml = loadYamlConfig(wsDir);
     const config = vscode.workspace.getConfiguration('mutationTesting');
     const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://core-service:8000');
@@ -350,7 +536,8 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.show(true); 
     outputChannel.appendLine("\n=================================================");
     outputChannel.appendLine("🧪 Initiating Golden Master baseline tests execution...");
-    outputChannel.appendLine(`   • Workspace: ${wsDir}`);
+    outputChannel.appendLine(`   • Project: ${activeProjectPath}`);
+    outputChannel.appendLine(`   • Build System: ${buildSystem}`);
     outputChannel.appendLine(`   • Core URL: ${backendUrl}`);
     outputChannel.appendLine("=================================================");
 
@@ -361,6 +548,8 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine(`   • Test runner: ${runnerType} (backend will auto-detect available runners)`);
 
       const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/test-runs/baseline`, {
+        projectPath: activeProjectPath,
+        buildSystem: buildSystem,
         workspaceDir: wsDir,
         testRunner: runnerType
       });
@@ -431,18 +620,15 @@ export function activate(context: vscode.ExtensionContext) {
     const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!wsDir) { return; }
 
+    // Use selected project path if available, otherwise fall back to workspace
+    const activeProjectPath = projectPath || wsDir;
+
     const config = loadYamlConfig(wsDir);
     const backendUrl = config.coreUrl;
     const aiProvider = vscode.workspace.getConfiguration('mutationTesting').get<string>('aiProvider', 'mock');
 
     let targetFiles: string[] = [];
-    let selectedOperators: string[] = [
-      "relational_operator_replacement",
-      "arithmetic_substitution",
-      "boundary_value_tweak",
-      "boolean_inversion",
-      "return_value_stripping"
-    ];
+    let selectedOperators: string[] = [...contextOperators];
 
     if (item && item.typeKey && item.typeKey.startsWith('file_child:')) {
       targetFiles = [item.typeKey.substring(11)];
@@ -488,42 +674,69 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       targetFiles = chosenFiles.map(item => item.label);
+    }
 
-      // Present interactive list selector of custom mutation operators to parse
-      const operatorOptions = [
-        { label: "Relational Operator Replacement", description: "Swap relational operators (< <= >= > == !=)", value: "relational_operator_replacement", picked: true },
-        { label: "Arithmetic Substitution", description: "Swap arithmetic operators (+ - * /)", value: "arithmetic_substitution", picked: true },
-        { label: "Boundary Value Tweaks", description: "Adjust numeric boundary literals (e.g. 10 -> 11)", value: "boundary_value_tweak", picked: true },
-        { label: "Boolean Inversion", description: "Invert logical connectors/literals (and-or, true-false, not)", value: "boolean_inversion", picked: true },
-        { label: "Return Value Stripping", description: "Strip or neutralize explicit return expressions", value: "return_value_stripping", picked: true }
-      ];
+    targetFiles = targetFiles.map(filePath => normalizeTargetPathForProject(wsDir, activeProjectPath, filePath));
 
-      const chosenOps = await vscode.window.showQuickPick(operatorOptions, {
-        canPickMany: true,
-        placeHolder: "Select mutation operator types to scan for (press Enter to choose all)",
-        title: "🧬 Pluggable Operator Type Selection"
-      });
-
-      if (chosenOps && chosenOps.length > 0) {
-        selectedOperators = chosenOps.map(op => op.value);
-      }
+    // ── Developer Instructions (inline prompt) ─────────────────
+    // Always surface the instructions step inside the scan flow so
+    // the user can confirm, edit, or clear them without running the
+    // separate configureMutationFlow wizard first.
+    const instructionInput = await vscode.window.showInputBox({
+      value: developerInstructions,
+      placeHolder: "e.g., Focus on boundary conditions, array index edge cases…",
+      prompt: developerInstructions
+        ? `Developer instructions (currently set — edit or leave as-is)`
+        : `Developer instructions for AI engine — describe focus areas (leave blank to skip)`,
+      title: "🧬 Developer Instructions (optional)"
+    });
+    // undefined = user pressed Escape → keep previous value; empty string = explicitly cleared
+    if (instructionInput !== undefined) {
+      developerInstructions = instructionInput;
+      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
     }
 
     statusBarItem.text = "🧬 Scanning AST...";
     outputChannel.show(true);
     outputChannel.appendLine("\n=================================================");
     outputChannel.appendLine(`🧬 Initiating AST Scan for Files: ${targetFiles.join(', ')}`);
+    outputChannel.appendLine(`   • Project: ${activeProjectPath}`);
+    outputChannel.appendLine(`   • Build System: ${buildSystem}`);
     outputChannel.appendLine(`   • Operators: ${selectedOperators.join(', ')}`);
     outputChannel.appendLine(`   • AI Prioritizer: ${aiProvider}`);
+    if (developerInstructions) {
+      outputChannel.appendLine(`   • Developer Instructions: "${developerInstructions}"`);
+    }
+    if (focusArea) {
+      outputChannel.appendLine(`   • Focus Area: ${focusArea}`);
+    }
+    if (testStrategy) {
+      outputChannel.appendLine(`   • Test Strategy: ${testStrategy}`);
+    }
     outputChannel.appendLine("=================================================");
 
     try {
-      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, {
+      const generatePayload: any = {
+        projectPath: activeProjectPath,
+        buildSystem: buildSystem,
         workspaceDir: wsDir,
         targetFiles: targetFiles,
         operators: selectedOperators,
         aiEngineProvider: aiProvider
-      });
+      };
+
+      // Include developer context if provided
+      if (developerInstructions.trim()) {
+        generatePayload.developerInstructions = developerInstructions;
+      }
+      if (focusArea.trim()) {
+        generatePayload.focusArea = focusArea;
+      }
+      if (testStrategy.trim()) {
+        generatePayload.testStrategy = testStrategy;
+      }
+
+      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, generatePayload);
 
       // Defensive handling to ensure resp.mutants is populated and avoids "properties of undefined (reading 'map')" crashes
       const mutantsFound = resp && resp.mutants ? resp.mutants : [];
@@ -540,7 +753,9 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine(`✅ AST Scan completed successfully!`);
       outputChannel.appendLine(`   • Total Candidates Parsed: ${activeMutantsList.length}`);
       activeMutantsList.forEach((m: any) => {
-        outputChannel.appendLine(`     - ${m.mutant_id}: Line ${m.line_number} | Operator: [${m.operator_type}] | Replacement: '${m.original_code}' ➜ '${m.mutated_value}'`);
+        const score = typeof m.priority_score === 'number' ? ` | Score: ${m.priority_score.toFixed(2)}` : '';
+        const boost = typeof m.context_boost === 'number' ? ` | Context Boost: +${m.context_boost.toFixed(2)}` : '';
+        outputChannel.appendLine(`     - ${m.mutant_id}: Line ${m.line_number} | Operator: [${m.operator_type}] | Priority: ${m.priority || 'N/A'}${score}${boost} | Replacement: '${m.original_code}' ➜ '${m.mutated_value}'`);
       });
       outputChannel.appendLine("=================================================");
 
@@ -1131,7 +1346,7 @@ export function activate(context: vscode.ExtensionContext) {
       clearInterval(dashboardRefreshTimer);
     });
 
-    // Dynamic, interactive SVG Live charts dashboard inside VS Code webview. Includes live connection to local Prometheus stats on :8000!
+    // Dynamic dashboard rendered as a webview. Metrics are streamed from the extension host.
     panel.webview.html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1181,18 +1396,6 @@ export function activate(context: vscode.ExtensionContext) {
       color: var(--vscode-editor-foreground);
       border-bottom: 1px dashed var(--vscode-widget-border);
       padding-bottom: 4px;
-
-      const valueNodes = {
-        vulnScore: document.getElementById('vulnScore'),
-        activeDebt: document.getElementById('activeDebt'),
-        generatedMutants: document.getElementById('generatedMutants'),
-        acceptedMutants: document.getElementById('acceptedMutants'),
-        baselineRuns: document.getElementById('baselineRuns'),
-        aiGenerated: document.getElementById('aiGenerated'),
-        sandboxTestsRun: document.getElementById('sandboxTestsRun'),
-        sandboxTestsPassed: document.getElementById('sandboxTestsPassed'),
-        sandboxTestsFailed: document.getElementById('sandboxTestsFailed')
-      };
       margin-bottom: 6px;
     }
     .metric {
@@ -1200,115 +1403,122 @@ export function activate(context: vscode.ExtensionContext) {
       font-weight: bold;
       text-align: center;
       margin: 6px 0;
-      const applyMetricsSnapshot = (metrics) => {
-        if (metrics.vulnScore !== null && metrics.vulnScore !== undefined) {
-          valueNodes.vulnScore.innerText = metrics.vulnScore + '%';
-        }
-        if (metrics.activeDebt !== null && metrics.activeDebt !== undefined) {
-          valueNodes.activeDebt.innerText = metrics.activeDebt + ' Mutants';
-          valueNodes.activeDebt.style.color = metrics.activeDebt > 0 ? '#ff9800' : '#4caf50';
-        }
-        if (metrics.generatedMutants !== null && metrics.generatedMutants !== undefined) {
-          valueNodes.generatedMutants.innerText = metrics.generatedMutants;
-        }
-        if (metrics.acceptedMutants !== null && metrics.acceptedMutants !== undefined) {
-          valueNodes.acceptedMutants.innerText = metrics.acceptedMutants;
-        }
-        if (metrics.baselineRuns !== null && metrics.baselineRuns !== undefined) {
-          valueNodes.baselineRuns.innerText = metrics.baselineRuns;
-        }
-        if (metrics.aiGenerated !== null && metrics.aiGenerated !== undefined) {
-          valueNodes.aiGenerated.innerText = metrics.aiGenerated;
-        }
-        if (metrics.sandboxTestsRun !== null && metrics.sandboxTestsRun !== undefined) {
-          valueNodes.sandboxTestsRun.innerText = metrics.sandboxTestsRun;
-        }
-        if (metrics.sandboxTestsPassed !== null && metrics.sandboxTestsPassed !== undefined) {
-          valueNodes.sandboxTestsPassed.innerText = metrics.sandboxTestsPassed;
-        }
-        if (metrics.sandboxTestsFailed !== null && metrics.sandboxTestsFailed !== undefined) {
-          valueNodes.sandboxTestsFailed.innerText = metrics.sandboxTestsFailed;
-        }
-      };
+    }
+    .desc {
+      margin: 0;
+      font-size: 0.85em;
+      opacity: 0.85;
+      text-align: center;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 12px;
+    }
+    .badge {
+      font-size: 0.75em;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 999px;
+      color: #fff;
+      background: #607d8b;
+    }
+    .status-text {
+      font-size: 0.85em;
+      opacity: 0.9;
+    }
+    iframe {
+      width: 100%;
+      height: 260px;
+      border: 1px solid var(--vscode-widget-border);
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mutation Observability Dashboard</h1>
+  <div class="status-row">
+    <span id="connectionStatus" class="badge">CONNECTING</span>
+    <span id="connectionStatusText" class="status-text">Waiting for initial metrics snapshot...</span>
+  </div>
 
-      window.addEventListener('message', event => {
-        const message = event.data;
-        if (!message || message.type !== 'mutation-metrics') {
-          return;
-        }
-
-        if (message.connected) {
-          setConnectionState('CONNECTED', message.statusText || 'Prometheus metrics stream is responding.', '#4caf50');
-        } else {
-          setConnectionState('DISCONNECTED', message.statusText || 'Unable to reach Prometheus from the extension host. Check the container stack and published ports.', '#f44336');
-        }
-
-        if (message.metrics) {
-          applyMetricsSnapshot(message.metrics);
-        }
-      });
-    </div>
-
+  <div class="section-title">Risk And Mutation Throughput</div>
+  <div class="grid">
     <div class="card">
-
-      void publishMetricsSnapshot();
+      <h3>Mutation Vulnerability Score</h3>
+      <div class="metric" id="vulnScore" style="color: #f44336;">0%</div>
+      <p class="desc">Higher values indicate broader mutation exposure.</p>
+    </div>
+    <div class="card">
+      <h3>Active Mutation Debt</h3>
+      <div class="metric" id="activeDebt" style="color: #ff9800;">0 Mutants</div>
+      <p class="desc">Surviving mutants that still need stronger tests.</p>
+    </div>
+    <div class="card">
       <h3>Total Generated Mutants</h3>
       <div class="metric" id="generatedMutants" style="color: #2196f3;">0</div>
-      <p class="desc">Candidates compiled via AST trees.</p>
+      <p class="desc">Candidates compiled via AST parsing.</p>
     </div>
-
     <div class="card">
       <h3>AI Tests Generated</h3>
       <div class="metric" id="aiGenerated" style="color: #00bcd4;">0</div>
-      <p class="desc">Targeted unit tests synthesized by LLMs.</p>
+      <p class="desc">Targeted tests synthesized by AI.</p>
     </div>
   </div>
 
-  <div class="section-title">⚙️ Isolated Sandbox & Test Execution Pipeline Statistics</div>
+  <div class="section-title">Sandbox Execution Statistics</div>
   <div class="grid">
     <div class="card">
       <h3>Baseline Runs</h3>
       <div class="metric" id="baselineRuns" style="color: #9c27b0;">0</div>
-      <p class="desc">Golden Master clean suite executions.</p>
+      <p class="desc">Golden master suite executions.</p>
     </div>
-
     <div class="card">
       <h3>Accepted Mutants</h3>
       <div class="metric" id="acceptedMutants" style="color: #4caf50;">0</div>
-      <p class="desc">Mutants accepted for verification runs.</p>
+      <p class="desc">Mutants queued for verification runs.</p>
     </div>
-
     <div class="card">
       <h3>Sandbox Tests Run</h3>
       <div class="metric" id="sandboxTestsRun" style="color: #e91e63;">0</div>
-      <p class="desc">Total checks executed in sandboxes.</p>
+      <p class="desc">Total checks executed in isolated sandboxes.</p>
     </div>
-
     <div class="card">
       <h3>Sandbox Tests Passed</h3>
       <div class="metric" id="sandboxTestsPassed" style="color: #4caf50;">0</div>
       <p class="desc">Passed checks (mutation survived).</p>
     </div>
-
     <div class="card">
       <h3>Sandbox Tests Failed</h3>
       <div class="metric" id="sandboxTestsFailed" style="color: #f44336;">0</div>
-      <p class="desc">Failed checks (mutation killed successfully).</p>
+      <p class="desc">Failed checks (mutation killed).</p>
     </div>
   </div>
 
   <div class="card" style="margin-top: 16px;">
-    <h3 style="font-size: 0.9em; margin-bottom: 4px;">📊 Local Prometheus/Grafana Embedded Telemetry</h3>
+    <h3 style="font-size: 0.9em; margin-bottom: 4px;">Local Grafana Panel</h3>
     <p style="font-size: 0.8em; opacity: 0.8; margin-bottom: 8px; margin-top: 4px;">
-      Exposes the live, reactive Grafana monitoring suite running inside your Dev Container or localhost loopback port <code style="background:var(--vscode-textBlockCode-background); padding:1px 3px;">:3000</code>.
+      Embedded panel from your Grafana instance.
     </p>
-    <!-- Live iframe load of local Grafana setup, with local HTML chart rendering fallback if Grafana container is offline -->
     <iframe src="${grafUrl}/d-solo/mutation-performance/mutation-metrics?orgId=1&panelId=1&refresh=5s" onerror="this.style.display='none';"></iframe>
   </div>
 
   <script>
     const connectionStatus = document.getElementById('connectionStatus');
     const connectionStatusText = document.getElementById('connectionStatusText');
+    const valueNodes = {
+      vulnScore: document.getElementById('vulnScore'),
+      activeDebt: document.getElementById('activeDebt'),
+      generatedMutants: document.getElementById('generatedMutants'),
+      acceptedMutants: document.getElementById('acceptedMutants'),
+      baselineRuns: document.getElementById('baselineRuns'),
+      aiGenerated: document.getElementById('aiGenerated'),
+      sandboxTestsRun: document.getElementById('sandboxTestsRun'),
+      sandboxTestsPassed: document.getElementById('sandboxTestsPassed'),
+      sandboxTestsFailed: document.getElementById('sandboxTestsFailed')
+    };
 
     const setConnectionState = (state, label, color) => {
       connectionStatus.innerText = state;
@@ -1316,9 +1526,58 @@ export function activate(context: vscode.ExtensionContext) {
       connectionStatusText.innerText = label;
     };
 
+    const applyMetricsSnapshot = (metrics) => {
+      if (metrics.vulnScore !== null && metrics.vulnScore !== undefined) {
+        valueNodes.vulnScore.innerText = metrics.vulnScore + '%';
+      }
+      if (metrics.activeDebt !== null && metrics.activeDebt !== undefined) {
+        valueNodes.activeDebt.innerText = metrics.activeDebt + ' Mutants';
+        valueNodes.activeDebt.style.color = metrics.activeDebt > 0 ? '#ff9800' : '#4caf50';
+      }
+      if (metrics.generatedMutants !== null && metrics.generatedMutants !== undefined) {
+        valueNodes.generatedMutants.innerText = metrics.generatedMutants;
+      }
+      if (metrics.acceptedMutants !== null && metrics.acceptedMutants !== undefined) {
+        valueNodes.acceptedMutants.innerText = metrics.acceptedMutants;
+      }
+      if (metrics.baselineRuns !== null && metrics.baselineRuns !== undefined) {
+        valueNodes.baselineRuns.innerText = metrics.baselineRuns;
+      }
+      if (metrics.aiGenerated !== null && metrics.aiGenerated !== undefined) {
+        valueNodes.aiGenerated.innerText = metrics.aiGenerated;
+      }
+      if (metrics.sandboxTestsRun !== null && metrics.sandboxTestsRun !== undefined) {
+        valueNodes.sandboxTestsRun.innerText = metrics.sandboxTestsRun;
+      }
+      if (metrics.sandboxTestsPassed !== null && metrics.sandboxTestsPassed !== undefined) {
+        valueNodes.sandboxTestsPassed.innerText = metrics.sandboxTestsPassed;
+      }
+      if (metrics.sandboxTestsFailed !== null && metrics.sandboxTestsFailed !== undefined) {
+        valueNodes.sandboxTestsFailed.innerText = metrics.sandboxTestsFailed;
+      }
+    };
+
+    window.addEventListener('message', event => {
+      const message = event.data;
+      if (!message || message.type !== 'mutation-metrics') {
+        return;
+      }
+
+      if (message.connected) {
+        setConnectionState('CONNECTED', message.statusText || 'Prometheus metrics stream is responding.', '#4caf50');
+      } else {
+        setConnectionState('DISCONNECTED', message.statusText || 'Unable to reach Prometheus from the extension host.', '#f44336');
+      }
+
+      if (message.metrics) {
+        applyMetricsSnapshot(message.metrics);
+      }
+    });
   </script>
 </body>
 </html>`;
+
+    void publishMetricsSnapshot();
   });
 
   // ══════════════════════════════════════════════════════════════
@@ -1465,6 +1724,11 @@ export function activate(context: vscode.ExtensionContext) {
     executeRuns,
     showDiff,
     analyzeCurrentEditor,
+    configureMutationFlow,
+    setDeveloperInstructions,
+    setFocusArea,
+    setTestStrategy,
+    clearDeveloperContext,
     proposeKillTest,
     suggestFixForMutant,
     suggestFixesCurrentEditor,

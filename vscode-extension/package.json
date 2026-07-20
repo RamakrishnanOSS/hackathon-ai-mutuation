@@ -4,6 +4,10 @@
   "description": "Visual Studio Code integration for AI-powered mutation testing, sandbox execution, and test synthesis.",
   "version": "1.0.0",
   "publisher": "hackathon-ai",
+  "repository": {
+    "type": "git",
+    "url": "/home/per9kor/hack/hackathon-ai-mutuation"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -38,6 +42,16 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "mutation.configureMutationFlow",
+          "when": "view == mutation-explorer",
+          "group": "inline@0"
+        },
+        {
+          "command": "mutation.clearDeveloperContext",
+          "when": "view == mutation-explorer",
+          "group": "inline@1"
+        },
         {
           "command": "mutation.runBaseline",
           "when": "view == mutation-explorer",
@@ -215,6 +229,36 @@
         "command": "mutation.generateReport",
         "title": "Generate Mutation Report",
         "icon": "$(report)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.configureMutationFlow",
+        "title": "Configure Mutation Context",
+        "icon": "$(settings-gear)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.setDeveloperInstructions",
+        "title": "Set Developer Instructions for Mutation Generation",
+        "icon": "$(edit)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.setFocusArea",
+        "title": "Set Mutation Focus Area",
+        "icon": "$(target)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.setTestStrategy",
+        "title": "Set Test Strategy",
+        "icon": "$(checklist)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.clearDeveloperContext",
+        "title": "Clear Developer Context",
+        "icon": "$(trash)",
         "category": "Mutation Testing"
       }
     ],

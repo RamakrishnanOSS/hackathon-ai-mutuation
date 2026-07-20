@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Mutation Testing — Dev Container Compose (project-sources workspace)
+#
+# The devcontainer workspace is project-sources/ — the common developer area
+# containing both C/C++ (c-src/) and Python (py-src/) projects.
+# The core-service is built from Dockerfile.core in mutation-engine/.
+#
+# Services:
+#   - devcontainer:   VS Code dev environment (Python 3.11, Node 20, build-essential)
+#   - core-service:   FastAPI mutation service (built from Dockerfile.core)
+#
+# The devcontainer joins "mutation-net" so services can communicate by name.
+# Both services share the same network and access to API keys via environment.
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  mutation-net:
+    external: true  # created and owned by mutation-engine/docker-compose.yml
+
+services:
+
+  # ── Dev container ──────────────────────────────────────────
+  devcontainer:
+    build:
+      context: ../..                 # project root as build context
+      dockerfile: project-sources/.devcontainer/Dockerfile
+    volumes:
+      - ..:/workspace:cached         # live-mount project-sources/ as /workspace
+    networks:
+      - mutation-net
+    depends_on:
+      - core-service
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    # keep container alive; actual processes started by devcontainer lifecycle hooks
+    command: /bin/sh -c "while sleep 3600; do :; done"
+
+  # ── Core mutation service (from Dockerfile.core) ───────────
+  core-service:
+    build:
+      context: ../..                 # repo root as build context
+      dockerfile: mutation-engine/Dockerfile.core
+    ports:
+      - "8001:8000"
+    networks:
+      - mutation-net
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ..:/workspace:cached               # live-mount project-sources/ as /workspace
+      - ../../mutation-engine/services:/app/services:cached  # live-mount services for hot-reload
+    command: python3 services/core_mutation_service.py

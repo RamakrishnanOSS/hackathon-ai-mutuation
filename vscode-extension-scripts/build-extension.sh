@@ -13,7 +13,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXT_DIR="${REPO_ROOT}/vscode-extension"
-VSIX_OUT="${REPO_ROOT}/agent/.devcontainer/ai-mutation-testing.vsix"
+VSIX_OUT="${REPO_ROOT}/project-sources/.devcontainer/ai-mutation-testing.vsix"
 
 echo "──────────────────────────────────────────────────"
 echo "▶ Building AI Mutation Testing VS Code extension"

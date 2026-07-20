@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Mutation Testing — Full Infrastructure Stack
+#
+# Start with:  docker compose up -d
+# Stop with:   docker compose down
+#
+# Services:
+#   core-service  – FastAPI mutation service    (port 8000)
+#   prometheus    – metrics scraper             (port 9090)
+#   grafana       – observability dashboards    (port 3000)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  mutation-net:
+    external: true  # network pre-exists; mutation-engine stack joins it
+
+volumes:
+  grafana-data:
+
+services:
+
+  # ── Core Mutation Service (FastAPI) ────────────────────────
+  core-service:
+    build:
+      context: ..
+      dockerfile: mutation-engine/Dockerfile.core
+    volumes:
+      - ../project-sources:/workspace:cached
+      - ./services:/app/services:cached
+      - ../project-sources:/project-sources:cached
+    networks:
+      - mutation-net
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Prometheus ─────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    networks:
+      - mutation-net
+    volumes:
+      - ./services/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - core-service
+    restart: unless-stopped
+
+  # ── Grafana ────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    networks:
+      - mutation-net
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./services/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./services/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped

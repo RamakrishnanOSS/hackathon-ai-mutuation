@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────
+# AI Mutation Testing — Core Service Image
+# Runs the FastAPI core mutation service on port 8000.
+# Requires g++/gcc for C/C++ mutation test execution.
+# ─────────────────────────────────────────────────────────────
+FROM python:3.11-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# ── System packages (needed for C/C++ test execution) ─────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        g++ \
+        gcc \
+        cmake \
+        make \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python dependencies ───────────────────────────────────────
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ── Application source ────────────────────────────────────────
+WORKDIR /app
+COPY mutation-engine/services/*.py ./services/
+COPY mutation-engine/services/build_system ./services/build_system/
+COPY mutation-engine/services/grafana ./services/grafana/
+COPY mutation-engine/services/prometheus.yml ./services/
+
+# ── Runtime ───────────────────────────────────────────────────
+EXPOSE 8000
+ENV PYTHONUNBUFFERED=1
+CMD ["python3", "services/core_mutation_service.py"]
