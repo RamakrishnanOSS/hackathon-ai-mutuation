@@ -348,7 +348,6 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install -e "${{ steps.scope.outputs.python_root }}"
           pip install "mutmut==2.4.4" pytest pytest-cov pytest-timeout pytest-xdist
 
       - name: Clear mutmut cache
@@ -361,6 +360,7 @@ jobs:
           PYTHON_ROOT="${{ steps.scope.outputs.python_root }}"
           # Coverage map lets mutmut skip uncovered lines and speed up mutant runs.
           cd "$PYTHON_ROOT"
+          export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
           python -m pytest tests -q --maxfail=1 --disable-warnings \
             --cov=src --cov-branch --cov-report=term-missing:skip-covered
           PYTEST_EXIT=$?
@@ -397,6 +397,7 @@ jobs:
             exit 0
           fi
           cd "$PYTHON_ROOT"
+          export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
           mutmut run 2>&1 | tee "$REPO_ROOT/reports/mutmut-run.log"
           echo "mutmut exit: ${PIPESTATUS[0]}" | tee -a "$REPO_ROOT/reports/mutmut-run.log"
           mutmut results 2>/dev/null | tee "$REPO_ROOT/reports/mutmut-results.log" || true
