@@ -131,11 +131,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          cd project-sources/py-src && pip install -e . && cd - || true
+          pip install pytest pytest-cov pytest-html junit2html
       - name: Run Python tests (pytest + unittest framework support)
         id: metrics
         shell: bash
-        run: bash project-sources/scripts/test-python.sh
+        run: |
+          export PYTHONPATH="$PWD/project-sources/py-src/src:${PYTHONPATH:-}"
+          bash project-sources/scripts/test-python.sh
       - name: Upload pytest artifacts
         if: always()
         uses: actions/upload-artifact@v6
