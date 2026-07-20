@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from parser import PythonASTAdapter, CppASTAdapter
 from test_runner import PytestRunnerAdapter, CppRunnerAdapter
 from ai_engine import AIEngine
+from build_system import BuildSystemFactory, BuildAdapter
 
 CPP_EXTENSIONS = [".cpp", ".cc", ".cxx", ".hpp", ".h", ".c"]
 
@@ -98,6 +99,37 @@ def get_runner_for_workspace(workspace_dir: str, target_files: Optional[List[str
         return CppRunnerAdapter()
     return PytestRunnerAdapter()
 
+
+# ══════════════════════════════════════════════════════════════
+# Helper: Normalize project path (support both old & new API)
+# ══════════════════════════════════════════════════════════════
+
+def resolve_project_path(project_path: Optional[str], workspace_dir: Optional[str]) -> str:
+    """
+    Resolve project path from new API (projectPath) or legacy API (workspaceDir).
+    Prefers projectPath if both provided.
+    
+    Args:
+        project_path: New API project path
+        workspace_dir: Legacy API workspace directory
+        
+    Returns:
+        Resolved project path
+        
+    Raises:
+        ValueError: If neither path is provided or path doesn't exist
+    """
+    path = project_path or workspace_dir
+    if not path:
+        raise ValueError("Either 'projectPath' or 'workspaceDir' must be provided")
+    
+    resolved = os.path.abspath(os.path.expanduser(path))
+    if not os.path.exists(resolved):
+        raise ValueError(f"Project path does not exist: {path}")
+    
+    return resolved
+
+
 app = FastAPI(
     title="AI-Mutation Core Service",
     description="Stateless and language-agnostic rest API service for compiling code mutations.",
@@ -129,12 +161,23 @@ DATABASE = {
 # ══════════════════════════════════════════════════════════════
 
 class BaselineRequest(BaseModel):
-    workspaceDir: str = Field(..., description="Root absolute directory path")
+    # New project-based API (preferred)
+    projectPath: Optional[str] = Field(None, description="Root absolute path to project (replaces workspaceDir)")
+    buildSystem: str = Field("auto", description="Build system: 'cmake', 'python', or 'auto' for auto-detect")
+    
+    # Legacy API (backward compatible)
+    workspaceDir: Optional[str] = Field(None, description="[DEPRECATED] Use projectPath instead")
     testRunner: str = "pytest"
 
 
 class MutationGenerateRequest(BaseModel):
-    workspaceDir: str
+    # New project-based API (preferred)
+    projectPath: Optional[str] = Field(None, description="Root absolute path to project (replaces workspaceDir)")
+    buildSystem: str = Field("auto", description="Build system: 'cmake', 'python', or 'auto' for auto-detect")
+    
+    # Legacy API (backward compatible)
+    workspaceDir: Optional[str] = Field(None, description="[DEPRECATED] Use projectPath instead")
+    
     targetFiles: List[str]
     operators: List[str] = [
         "relational_operator_replacement",
@@ -179,197 +222,184 @@ def api_health():
 
 @app.post("/api/v1/projects/{projectId}/test-runs/baseline")
 def execute_baseline(projectId: str, payload: BaselineRequest):
-    """Establish unmodified tests 'Golden Master' baseline metrics."""
-    # Support mixed workspaces where both C++ and Python elements are scanned and run
-    print(payload)
-    runners_to_run = []
-    
-    req_runner = payload.testRunner.lower() if payload.testRunner else "all"
-    
-    pytest_runner = PytestRunnerAdapter()
-    cpp_runner = CppRunnerAdapter()
-    
-    has_pytest = pytest_runner.detect_workspace(payload.workspaceDir)
-    has_cpp = cpp_runner.detect_workspace(payload.workspaceDir)
-    
-    print(has_pytest)
-    print(req_runner)
-    
-    if req_runner in ["pytest", "python"]:
-        if has_pytest:
-            runners_to_run.append(("python", pytest_runner))
-    elif req_runner in ["g++", "cpp", "c", "gcc", "gtest"]:
-        if has_cpp:
-            runners_to_run.append(("cpp", cpp_runner))
-    else:  # "all", "both" or automatic detection
-        if has_pytest:
-            runners_to_run.append(("python", pytest_runner))
-        if has_cpp:
-            runners_to_run.append(("cpp", cpp_runner))
-
-    if not runners_to_run:
-        # fallback to what is detected
-        if has_pytest:
-            runners_to_run.append(("python", pytest_runner))
-        if has_cpp:
-            runners_to_run.append(("cpp", cpp_runner))
-            
-    if not runners_to_run:
-        raise HTTPException(
-            status_code=400,
-            detail="Specified workspace does not contain matching pytest or C++ dynamic configurations."
-        )
-
-    tests_merged = []
-    total_tests = 0
-    duration_ms = 0
-    overall_status = "TESTS_PASSED"
-
-    def _find_c_source_files(workspace_dir: str):
-        """Return all non-test C/C++ source files under the workspace root."""
-        C_EXTS = ('.c', '.cpp', '.cc', '.cxx')
-        found = []
-        for search_dir in [workspace_dir]:
-            if not os.path.isdir(search_dir):
-                continue
-            for fname in os.listdir(search_dir):
-                base, ext = os.path.splitext(fname)
-                if ext.lower() not in C_EXTS:
-                    continue
-                # Skip test files and header-only files
-                if fname.startswith("test_") or fname.endswith("_test" + ext):
-                    continue
-                if ext.lower() in ('.h', '.hpp'):
-                    continue
-                full = os.path.join(search_dir, fname)
-                if os.path.isfile(full):
-                    found.append(full)
-        return found
-
-    for lang, runner in runners_to_run:
-        if lang == "cpp":
-            # Find every C/C++ source file and run its paired test
-            c_sources = _find_c_source_files(payload.workspaceDir)
-            if not c_sources:
-                # hard fallback
-                c_sources = [os.path.join(payload.workspaceDir, "agent", "hello.cpp")]
-            for primary_file in c_sources:
-                temp_sandbox = os.path.join(tempfile_dir_root(), f"baseline-cpp-{uuid.uuid4().hex[:8]}")
-                res_lang = runner.execute_suite(
-                    workspace_root=payload.workspaceDir,
-                    sandbox_dir=temp_sandbox,
-                    target_file=primary_file,
-                    mutated_code=None
-                )
-                if res_lang.get("overallStatus") != "TESTS_PASSED":
-                    overall_status = "TESTS_FAILED"
-                total_tests += res_lang.get("totalTests", 0)
-                duration_ms += res_lang.get("durationMs", 0)
-                tests_merged.extend(res_lang.get("tests", []))
-        else:
-            # Python: pytest auto-discovers all test_*.py — one run covers everything
-            primary_file = os.path.join(payload.workspaceDir, "hello.py")
-            temp_sandbox = os.path.join(tempfile_dir_root(), f"baseline-python-{uuid.uuid4().hex[:8]}")
-            res_lang = runner.execute_suite(
-                workspace_root=payload.workspaceDir,
-                sandbox_dir=temp_sandbox,
-                target_file=primary_file,
-                mutated_code=None
+    """
+    Establish unmodified tests 'Golden Master' baseline metrics.
+    Uses new project-based API with automatic build system detection.
+    """
+    try:
+        # Resolve project path (prefer new API, fall back to legacy)
+        project_path = resolve_project_path(payload.projectPath, payload.workspaceDir)
+        
+        # Auto-detect or use specified build system
+        try:
+            build_adapter = BuildSystemFactory.create(project_path, payload.buildSystem)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Build system error: {str(e)}")
+        
+        print(f"[BASELINE] Using {build_adapter.__class__.__name__} for {project_path}")
+        
+        # Step 1: Compile the project
+        compile_result = build_adapter.compile()
+        if not compile_result.success:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Compilation failed: {compile_result.stderr}"
             )
-            if res_lang.get("overallStatus") != "TESTS_PASSED":
-                overall_status = "TESTS_FAILED"
-            total_tests += res_lang.get("totalTests", 0)
-            duration_ms += res_lang.get("durationMs", 0)
-            tests_merged.extend(res_lang.get("tests", []))
-
-    final_res = {
-        "overallStatus": overall_status,
-        "killingTest": None,
-        "failureOutput": "",
-        "durationMs": duration_ms,
-        "testsPassed": total_tests if overall_status == "TESTS_PASSED" else max(0, total_tests - 1),
-        "testsFailed": 0 if overall_status == "TESTS_PASSED" else 1,
-        "totalTests": total_tests,
-        "tests": tests_merged
-    }
-
-    DATABASE["projects"][projectId] = {
-        "workspace": payload.workspaceDir,
-        "baseline": final_res
-    }
-
-    # Increment baseline run details inside the memory registry
-    DATABASE["baseline_runs_count"] = DATABASE.get("baseline_runs_count", 0) + 1
-    if overall_status == "TESTS_PASSED":
-        DATABASE["baseline_runs_passed"] = DATABASE.get("baseline_runs_passed", 0) + 1
-    else:
-        DATABASE["baseline_runs_failed"] = DATABASE.get("baseline_runs_failed", 0) + 1
-
-    return {
-        "runId": f"base_{uuid.uuid4().hex[:8]}",
-        "status": "SUCCESS" if overall_status == "TESTS_PASSED" else "FAIL",
-        "totalTests": total_tests,
-        "durationMs": duration_ms,
-        "details": final_res
-    }
+        
+        print(f"[BASELINE] Compile successful")
+        
+        # Step 2: Run tests
+        test_result = build_adapter.run_tests()
+        
+        final_res = {
+            "overallStatus": "TESTS_PASSED" if test_result.all_passed else "TESTS_FAILED",
+            "killingTest": None,
+            "failureOutput": test_result.stderr if not test_result.all_passed else "",
+            "durationMs": 0,  # CTest doesn't provide granular timing
+            "testsPassed": test_result.tests_passed,
+            "testsFailed": test_result.tests_failed,
+            "totalTests": test_result.total_tests,
+            "tests": [],  # Granular test details would come from test runner
+            "buildSystem": build_adapter.__class__.__name__,
+            "projectPath": project_path
+        }
+        
+        # Store in database
+        DATABASE["projects"][projectId] = {
+            "projectPath": project_path,
+            "buildSystem": build_adapter.__class__.__name__,
+            "baseline": final_res
+        }
+        
+        # Increment baseline run stats
+        DATABASE["baseline_runs_count"] = DATABASE.get("baseline_runs_count", 0) + 1
+        if test_result.all_passed:
+            DATABASE["baseline_runs_passed"] = DATABASE.get("baseline_runs_passed", 0) + 1
+        else:
+            DATABASE["baseline_runs_failed"] = DATABASE.get("baseline_runs_failed", 0) + 1
+        
+        return {
+            "runId": f"base_{uuid.uuid4().hex[:8]}",
+            "status": "SUCCESS" if test_result.all_passed else "FAIL",
+            "totalTests": test_result.total_tests,
+            "testsPassed": test_result.tests_passed,
+            "testsFailed": test_result.tests_failed,
+            "durationMs": 0,
+            "buildSystem": build_adapter.__class__.__name__,
+            "details": final_res
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Baseline error: {str(e)}")
 
 
 @app.post("/api/v1/projects/{projectId}/mutations/generate")
 def generate_mutations(projectId: str, payload: MutationGenerateRequest):
-    """Scan and generate logical AST mutation candidates."""
-    all_mutants = []
-    requested_ops = set(payload.operators or [])
-    legacy_aliases = {
-        "arithmetic": "arithmetic_substitution",
-        "conditional_boundary": "relational_operator_replacement",
-        "logical": "boolean_inversion",
-    }
-    requested_ops_normalized = {legacy_aliases.get(op, op) for op in requested_ops}
-
-    for file_rel in payload.targetFiles:
-        # Resolve target files cleanly to handle potential nested or absolute paths on Windows
-        if os.path.isabs(file_rel):
-            full_path = file_rel
-        else:
-            full_path = os.path.join(payload.workspaceDir, file_rel)
-            
-        if not os.path.exists(full_path):
-            # Fallback to local files if path mismatch
-            fallback_name = os.path.basename(file_rel)
-            fallback_path = os.path.join(payload.workspaceDir, "agent", fallback_name)
-            if os.path.exists(fallback_path):
-                full_path = fallback_path
+    """
+    Scan and generate logical AST mutation candidates.
+    Uses new project-based API with automatic build system detection.
+    """
+    try:
+        # Resolve project path (prefer new API, fall back to legacy)
+        project_path = resolve_project_path(payload.projectPath, payload.workspaceDir)
+        
+        # Auto-detect or use specified build system
+        try:
+            build_adapter = BuildSystemFactory.create(project_path, payload.buildSystem)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Build system error: {str(e)}")
+        
+        print(f"[GENERATE] Using {build_adapter.__class__.__name__} for {project_path}")
+        
+        # If targetFiles not provided, auto-discover from build system
+        target_files = payload.targetFiles
+        if not target_files:
+            print(f"[GENERATE] Auto-discovering source files...")
+            target_files = build_adapter.get_source_files(pattern="*.c|*.cpp|*.cc|*.cxx|*.py")
+            if not target_files:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No source files found in project"
+                )
+            print(f"[GENERATE] Discovered {len(target_files)} source files")
+        
+        # Generate mutations from discovered/provided files
+        all_mutants = []
+        requested_ops = set(payload.operators or [])
+        legacy_aliases = {
+            "arithmetic": "arithmetic_substitution",
+            "conditional_boundary": "relational_operator_replacement",
+            "logical": "boolean_inversion",
+        }
+        requested_ops_normalized = {legacy_aliases.get(op, op) for op in requested_ops}
+        
+        for file_rel in target_files:
+            # Resolve target files cleanly to handle potential nested or absolute paths on Windows
+            if os.path.isabs(file_rel):
+                full_path = file_rel
             else:
-                raise HTTPException(status_code=404, detail=f"Target file not found: {file_rel}")
+                full_path = os.path.join(project_path, file_rel)
+                
+            if not os.path.exists(full_path):
+                # Fallback to local files if path mismatch
+                fallback_name = os.path.basename(file_rel)
+                fallback_path = os.path.join(project_path, "agent", fallback_name)
+                if os.path.exists(fallback_path):
+                    full_path = fallback_path
+                else:
+                    print(f"[GENERATE] Warning: Target file not found: {file_rel}, skipping...")
+                    continue
 
-        with open(full_path, "r", encoding="utf-8") as f:
-            content = f.read()
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
-        adapter = get_adapter_for_file(full_path)
-        file_candidates = adapter.parse_mutations(file_rel, content)
-        if requested_ops_normalized:
-            file_candidates = [
-                m for m in file_candidates
-                if m.get("operator_type") in requested_ops_normalized
-            ]
-        all_mutants.extend(file_candidates)
+            adapter = get_adapter_for_file(full_path)
+            file_candidates = adapter.parse_mutations(file_rel, content)
+            if requested_ops_normalized:
+                file_candidates = [
+                    m for m in file_candidates
+                    if m.get("operator_type") in requested_ops_normalized
+                ]
+            all_mutants.extend(file_candidates)
 
-    # Apply AI Intelligence selection weighting and prioritization
-    language = detect_language_from_targets(payload.workspaceDir, payload.targetFiles)
-    ai_engine = build_ai_engine(language, payload.aiEngineProvider, payload.aiApiKey)
-    prioritized_list = ai_engine.prioritize_mutants(all_mutants)
+        if not all_mutants:
+            print(f"[GENERATE] No mutations generated from discovered files")
+            return {
+                "projectId": projectId,
+                "generationId": f"gen_{uuid.uuid4().hex[:8]}",
+                "mutants": [],
+                "buildSystem": build_adapter.__class__.__name__,
+                "projectPath": project_path
+            }
 
-    # Cache mutant schemas to server database register
-    for m in prioritized_list:
-        m_id = m["mutant_id"]
-        DATABASE["mutations_cache"][m_id] = m
-        DATABASE["active_acceptance"][m_id] = "ACCEPTED"
+        # Apply AI Intelligence selection weighting and prioritization
+        # Detect language from discovered files or provided targets
+        language = detect_language_from_targets(project_path, target_files)
+        ai_engine = build_ai_engine(language, payload.aiEngineProvider, payload.aiApiKey)
+        prioritized_list = ai_engine.prioritize_mutants(all_mutants)
 
-    return {
-        "projectId": projectId,
-        "generationId": f"gen_{uuid.uuid4().hex[:8]}",
-        "mutants": prioritized_list
-    }
+        # Cache mutant schemas to server database register
+        for m in prioritized_list:
+            m_id = m["mutant_id"]
+            DATABASE["mutations_cache"][m_id] = m
+            DATABASE["active_acceptance"][m_id] = "ACCEPTED"
+
+        return {
+            "projectId": projectId,
+            "generationId": f"gen_{uuid.uuid4().hex[:8]}",
+            "mutants": prioritized_list,
+            "buildSystem": build_adapter.__class__.__name__,
+            "projectPath": project_path,
+            "filesScanned": len(target_files)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Mutation generation error: {str(e)}")
+
 
 
 @app.post("/api/v1/projects/{projectId}/mutations/{mutantId}/accept")

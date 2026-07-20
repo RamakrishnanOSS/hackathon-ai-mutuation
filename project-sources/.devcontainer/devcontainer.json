@@ -1,12 +1,12 @@
 // ────────────────────────────────────────────────────────────────
-// AI Mutation Testing — Dev Container Configuration (agent workspace)
-// Opens agent/ as the VS Code workspace root.
+// AI Mutation Testing — Dev Container Configuration (project-sources workspace)
+// Opens project-sources/ as the VS Code workspace root.
 // Python 3.11 + Node 20 + g++ are provided by the custom Dockerfile.
 //
 // Features:
 //   - Dockerfile.core integrated as "core-service" in docker-compose.yml
 //   - Services: devcontainer (dev env) + core-service (FastAPI mutation engine)
-//   - Port forwarding: 8000 (FastAPI), 3000 (Grafana), 9090 (Prometheus)
+//   - Port forwarding: 8001 (FastAPI), 3000 (Grafana), 9090 (Prometheus)
 //
 // Extension workflow:
 //   Build (host only, run once before opening the devcontainer, from repo root):
@@ -26,11 +26,11 @@
   // ── Features ────────────────────────────────────────────────
   //
   // Dockerfile.core is integrated via docker-compose.yml as the "core-service".
-  // The devcontainer image itself (agent/.devcontainer/Dockerfile) includes:
+  // The devcontainer image itself (project-sources/.devcontainer/Dockerfile) includes:
   //   - Python 3.11, Node 20, build-essential, g++, gcc, cmake, make
   //   - Git, curl, jq, and pip dependencies from requirements.txt
   //
-  // The core-service (built from root Dockerfile.core) provides:
+  // The core-service (built from mutation-engine/Dockerfile.core) provides:
   //   - Python 3.11 with FastAPI for the mutation engine
   //   - g++, gcc, cmake, make for C/C++ mutation test execution
   //   - Accessible at http://core-service:8000 (within Docker network)

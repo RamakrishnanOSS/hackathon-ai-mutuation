@@ -29,7 +29,7 @@ on:
         description: "Folder to scan for mutation targets"
         required: true
         type: string
-        default: agent
+        default: project-sources
       mutation_languages:
         description: "Languages to run mutation testing on"
         required: true
@@ -89,21 +89,7 @@ jobs:
         run: pip install flake8 flake8-bugbear flake8-html
       - name: Generate flake8 HTML report
         shell: bash
-        run: |
-          mkdir -p reports/flake8-html
-          PY_FILES=$(find agent -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
-          ROOT_PY=$(find . -maxdepth 1 -type f -name '*.py' 2>/dev/null | sort | tr '\n' ' ')
-          if [ -z "$PY_FILES$ROOT_PY" ]; then
-            python3 -c "
-          from pathlib import Path
-          Path('reports/flake8-html/index.html').write_text(
-              '<html><body><h1>No Python files found to lint.</h1></body></html>', encoding='utf-8')"
-            exit 0
-          fi
-          flake8 $PY_FILES $ROOT_PY \
-            --max-line-length=120 \
-            --extend-ignore=E203,W503,E501,W293,E261,E302,E305,E201,E202,F401,B007,E127 \
-            --format=html --htmldir=reports/flake8-html --statistics || true
+        run: bash project-sources/scripts/lint.sh
       # - name: Upload flake8 report
       #   if: always()
       #   uses: actions/upload-artifact@v6
@@ -151,61 +137,21 @@ jobs:
       - name: Collect Python source & test files
         shell: bash
         run: |
-          mkdir -p reports/python-sources/agent
-          find agent -type f -name '*.py' 2>/dev/null | while read f; do
-            dest="reports/python-sources/$f"
+          mkdir -p reports/python-sources
+          # Collect from py-src (primary), mutation-engine tests, and any project-sources
+          find project-sources/py-src mutation-engine/tests -type f -name '*.py' 2>/dev/null | while read f; do
+            dest="reports/python-sources/$(echo $f | sed 's|/|_|g')"
             mkdir -p "$(dirname "$dest")"
             cp "$f" "$dest"
           done
-          find agent -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
+          # Find all test files
+          find project-sources/py-src/tests mutation-engine/tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
             | sort > reports/pytest-files.txt
           echo "=== Test files discovered ===" && cat reports/pytest-files.txt || true
-      - name: Run pytest
-        shell: bash
-        run: |
-          set +e
-          if [ ! -s reports/pytest-files.txt ]; then
-            echo "No Python test files found."
-            python3 -c "
-          from pathlib import Path
-          Path('reports/pytest-report.html').write_text(
-              '<html><body><h1>No test files found.</h1></body></html>', encoding='utf-8')"
-            echo "0" > reports/pytest-exit-code.txt
-            exit 0
-          fi
-          TEST_FILES=$(tr '\n' ' ' < reports/pytest-files.txt)
-          python -m pytest $TEST_FILES -v --tb=short \
-            --junitxml=reports/pytest-results.xml \
-            --html=reports/pytest-report.html \
-            --self-contained-html --no-header
-          echo "$?" > reports/pytest-exit-code.txt
-          set -e
-      - name: Convert JUnit XML to HTML
-        run: |
-          if [ -f reports/pytest-results.xml ]; then
-            junit2html reports/pytest-results.xml reports/pytest-junit-report.html || true
-          fi
-      - name: Parse pytest metrics
+      - name: Run Python tests
         id: metrics
-        run: |
-          python3 - <<'PY'
-          import os
-          import xml.etree.ElementTree as ET
-          total = passed = failed = errors = skipped = 0
-          xml_file = "reports/pytest-results.xml"
-          if os.path.exists(xml_file):
-              root = ET.parse(xml_file).getroot()
-              suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
-              for suite in suites:
-                  total   += int(suite.attrib.get("tests",    0))
-                  failed  += int(suite.attrib.get("failures", 0))
-                  errors  += int(suite.attrib.get("errors",   0))
-                  skipped += int(suite.attrib.get("skipped",  0))
-          passed = max(total - failed - errors - skipped, 0)
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-              f.write(f"total={total}\npassed={passed}\nfailed={failed}\nerrors={errors}\nskipped={skipped}\n")
-          print(f"pytest: total={total} passed={passed} failed={failed}")
-          PY
+        shell: bash
+        run: bash project-sources/scripts/test-python.sh
       - name: Upload pytest artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -247,61 +193,13 @@ jobs:
         with:
           fetch-depth: 1
       - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y gcc make
+        run: sudo apt-get update -qq && sudo apt-get install -y gcc g++ make cmake
       - name: Create reports directory
         run: mkdir -p reports
-      - name: Collect C files
-        shell: bash
-        run: |
-          mkdir -p reports/c-sources
-          find agent -type f \( -name '*.c' -o -name '*.h' \) 2>/dev/null | while read f; do
-            cp "$f" "reports/c-sources/$(basename "$f")"
-          done
-          find agent -type f -name 'test_*.c' | sort > reports/c-test-files.txt
-          echo "=== C test files ===" && cat reports/c-test-files.txt || true
-      - name: Compile and run C tests
+      - name: Collect C files and run tests
         id: metrics
         shell: bash
-        run: |
-          set +e
-          LOG="reports/c-build.log"; : > "$LOG"
-          FILES=0; COMPILE_PASS=0; COMPILE_FAIL=0; RUN_PASS=0; RUN_FAIL=0
-          if [ ! -s reports/c-test-files.txt ]; then
-            echo "No C test files discovered." | tee -a "$LOG"
-          else
-            while read -r TEST_FILE; do
-              [ -z "$TEST_FILE" ] && continue
-              FILES=$((FILES + 1))
-              BASENAME=$(basename "$TEST_FILE")
-              STEM="${BASENAME#test_}"; STEM="${STEM%.c}"
-              DIR=$(dirname "$TEST_FILE")
-              SRC=""; [ -f "$DIR/${STEM}.c" ] && SRC="$DIR/${STEM}.c"
-              OUT="/tmp/${STEM}_c_test"
-              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
-              echo "========================================" | tee -a "$LOG"
-              echo "C TEST : $TEST_FILE | SRC: ${SRC:-none}" | tee -a "$LOG"
-              if [ -n "$SRC" ]; then
-                gcc -std=c11 -Wall $INCLUDES -o "$OUT" "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
-              else
-                gcc -std=c11 -Wall $INCLUDES -o "$OUT" "$TEST_FILE" >> "$LOG" 2>&1
-              fi
-              if [ $? -eq 0 ]; then
-                COMPILE_PASS=$((COMPILE_PASS + 1))
-                echo "[BUILD PASS] $TEST_FILE" | tee -a "$LOG"
-                "$OUT" >> "$LOG" 2>&1
-                if [ $? -eq 0 ]; then
-                  RUN_PASS=$((RUN_PASS + 1)); echo "[RUN PASS]" | tee -a "$LOG"
-                else
-                  RUN_FAIL=$((RUN_FAIL + 1)); echo "[RUN FAIL]" | tee -a "$LOG"
-                fi
-              else
-                COMPILE_FAIL=$((COMPILE_FAIL + 1))
-                echo "[BUILD FAIL] $TEST_FILE" | tee -a "$LOG"
-              fi
-            done < reports/c-test-files.txt
-          fi
-          { echo "files=$FILES"; echo "compile_pass=$COMPILE_PASS"; echo "compile_fail=$COMPILE_FAIL"
-            echo "run_pass=$RUN_PASS"; echo "run_fail=$RUN_FAIL"; } >> "$GITHUB_OUTPUT"
+        run: bash project-sources/scripts/test-c.sh
       - name: Upload C artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -341,62 +239,13 @@ jobs:
         with:
           fetch-depth: 1
       - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y g++ make
+        run: sudo apt-get update -qq && sudo apt-get install -y g++ make cmake
       - name: Create reports directory
         run: mkdir -p reports
-      - name: Collect C++ files
-        shell: bash
-        run: |
-          mkdir -p reports/cpp-sources
-          find agent -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \) \
-            2>/dev/null | while read f; do cp "$f" "reports/cpp-sources/$(basename "$f")"; done
-          find agent -type f \( -name 'test_*.cpp' -o -name 'test_*.cc' \) \
-            | sort > reports/cpp-test-files.txt
-          echo "=== C++ test files ===" && cat reports/cpp-test-files.txt || true
-      - name: Compile and run C++ tests
+      - name: Collect C++ files and run tests
         id: metrics
         shell: bash
-        run: |
-          set +e
-          LOG="reports/cpp-build.log"; : > "$LOG"
-          FILES=0; COMPILE_PASS=0; COMPILE_FAIL=0; RUN_PASS=0; RUN_FAIL=0
-          if [ ! -s reports/cpp-test-files.txt ]; then
-            echo "No C++ test files discovered." | tee -a "$LOG"
-          else
-            while read -r TEST_FILE; do
-              [ -z "$TEST_FILE" ] && continue
-              FILES=$((FILES + 1))
-              BASENAME=$(basename "$TEST_FILE"); STEM="${BASENAME#test_}"; STEM="${STEM%.*}"
-              EXT="${BASENAME##*.}"; DIR=$(dirname "$TEST_FILE")
-              SRC=""
-              if   [ -f "$DIR/${STEM}.${EXT}" ]; then SRC="$DIR/${STEM}.${EXT}"
-              elif [ -f "$DIR/${STEM}.cpp"     ]; then SRC="$DIR/${STEM}.cpp"
-              elif [ -f "$DIR/${STEM}.cc"      ]; then SRC="$DIR/${STEM}.cc"
-              fi
-              OUT="/tmp/${STEM}_cpp_test"
-              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
-              echo "========================================"   | tee -a "$LOG"
-              echo "C++ TEST: $TEST_FILE | SRC: ${SRC:-none}" | tee -a "$LOG"
-              if [ -n "$SRC" ]; then
-                g++ -std=c++17 -Wall $INCLUDES -o "$OUT" "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
-              else
-                g++ -std=c++17 -Wall $INCLUDES -o "$OUT" "$TEST_FILE" >> "$LOG" 2>&1
-              fi
-              if [ $? -eq 0 ]; then
-                COMPILE_PASS=$((COMPILE_PASS + 1)); echo "[BUILD PASS] $TEST_FILE" | tee -a "$LOG"
-                "$OUT" >> "$LOG" 2>&1
-                if [ $? -eq 0 ]; then
-                  RUN_PASS=$((RUN_PASS + 1)); echo "[RUN PASS]" | tee -a "$LOG"
-                else
-                  RUN_FAIL=$((RUN_FAIL + 1)); echo "[RUN FAIL]" | tee -a "$LOG"
-                fi
-              else
-                COMPILE_FAIL=$((COMPILE_FAIL + 1)); echo "[BUILD FAIL] $TEST_FILE" | tee -a "$LOG"
-              fi
-            done < reports/cpp-test-files.txt
-          fi
-          { echo "files=$FILES"; echo "compile_pass=$COMPILE_PASS"; echo "compile_fail=$COMPILE_FAIL"
-            echo "run_pass=$RUN_PASS"; echo "run_fail=$RUN_FAIL"; } >> "$GITHUB_OUTPUT"
+        run: bash project-sources/scripts/test-cpp.sh
       - name: Upload C++ artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -460,7 +309,7 @@ jobs:
         id: scope
         shell: bash
         run: |
-          SCOPE="${{ github.event_name == 'workflow_dispatch' && inputs.mutation_scope || 'agent' }}"
+          SCOPE="${{ github.event_name == 'workflow_dispatch' && inputs.mutation_scope || 'project-sources' }}"
           echo "scope=$SCOPE" >> "$GITHUB_OUTPUT"
           echo "Mutation scope: $SCOPE"
 
@@ -682,58 +531,7 @@ jobs:
       - name: Run C mutation testing
         id: metrics
         shell: bash
-        run: |
-          set +e
-          mkdir -p reports/c-mutants
-          LOG="reports/c-mutation.log"; : > "$LOG"
-          KILLED=0; SURVIVED=0; TOTAL=0
-          SRC_FILES=$(find agent -type f -name '*.c' ! -name 'test_*.c' 2>/dev/null | sort)
-          if [ -z "$SRC_FILES" ]; then
-            echo "No C source files to mutate." | tee -a "$LOG"
-          else
-            for SRC in $SRC_FILES; do
-              STEM=$(basename "$SRC" .c); DIR=$(dirname "$SRC")
-              TEST_FILE="$DIR/test_${STEM}.c"
-              if [ ! -f "$TEST_FILE" ]; then
-                echo "SKIP (no test): $SRC" | tee -a "$LOG"; continue
-              fi
-              MUTANT_DIR="reports/c-mutants/${STEM}"
-              mkdir -p "$MUTANT_DIR"
-              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
-              echo "========================================" | tee -a "$LOG"
-              echo "Mutating: $SRC | Test: $TEST_FILE"       | tee -a "$LOG"
-              mutate "$SRC" --mutantDir "$MUTANT_DIR" >> "$LOG" 2>&1 || true
-              MCOUNT=$(find "$MUTANT_DIR" -name '*.c' | wc -l)
-              echo "Generated $MCOUNT mutants" | tee -a "$LOG"
-              gcc -std=c11 -Wall $INCLUDES -o /tmp/orig_c_test "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
-              if [ $? -ne 0 ]; then
-                echo "BASELINE COMPILE FAIL — skip" | tee -a "$LOG"; continue
-              fi
-              /tmp/orig_c_test >> "$LOG" 2>&1; BASELINE=$?
-              echo "Baseline exit: $BASELINE" | tee -a "$LOG"
-              for MUTANT in "$MUTANT_DIR"/*.c; do
-                [ -f "$MUTANT" ] || continue
-                TOTAL=$((TOTAL + 1))
-                MID=$(basename "$MUTANT" .c)
-                gcc -std=c11 -Wall $INCLUDES -o /tmp/mut_c_test "$MUTANT" "$TEST_FILE" >> "$LOG" 2>&1
-                if [ $? -ne 0 ]; then
-                  KILLED=$((KILLED + 1)); echo "[KILLED-COMPILE] $MID" | tee -a "$LOG"; continue
-                fi
-                /tmp/mut_c_test >> "$LOG" 2>&1; RUN_EXIT=$?
-                if [ "$RUN_EXIT" -ne "$BASELINE" ]; then
-                  KILLED=$((KILLED + 1)); echo "[KILLED] $MID" | tee -a "$LOG"
-                else
-                  SURVIVED=$((SURVIVED + 1)); echo "[SURVIVED] $MID" | tee -a "$LOG"
-                  diff "$SRC" "$MUTANT" > "$MUTANT_DIR/${MID}.diff" 2>/dev/null || true
-                fi
-              done
-            done
-          fi
-          SCORE=$(python3 -c "print(round($KILLED/$TOTAL*100,2) if $TOTAL>0 else 0.0)" || echo 0)
-          echo "C mutation: killed=$KILLED survived=$SURVIVED total=$TOTAL score=$SCORE%" | tee -a "$LOG"
-          { echo "killed=$KILLED"; echo "survived=$SURVIVED"
-            echo "total=$TOTAL";   echo "score=$SCORE"; } >> "$GITHUB_OUTPUT"
-          set -e
+        run: bash project-sources/scripts/mutate-c.sh
       - name: Upload C mutation artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -784,62 +582,7 @@ jobs:
       - name: Run C++ mutation testing
         id: metrics
         shell: bash
-        run: |
-          set +e
-          mkdir -p reports/cpp-mutants
-          LOG="reports/cpp-mutation.log"; : > "$LOG"
-          KILLED=0; SURVIVED=0; TOTAL=0
-          SRC_FILES=$(find agent -type f \( -name '*.cpp' -o -name '*.cc' \) \
-            ! -name 'test_*' 2>/dev/null | sort)
-          if [ -z "$SRC_FILES" ]; then
-            echo "No C++ source files to mutate." | tee -a "$LOG"
-          else
-            for SRC in $SRC_FILES; do
-              STEM_FULL=$(basename "$SRC"); STEM="${STEM_FULL%.*}"; DIR=$(dirname "$SRC")
-              TEST_FILE=""
-              for TRY in "$DIR/test_${STEM}.cpp" "$DIR/test_${STEM}.cc"; do
-                [ -f "$TRY" ] && TEST_FILE="$TRY" && break
-              done
-              if [ -z "$TEST_FILE" ]; then
-                echo "SKIP (no test): $SRC" | tee -a "$LOG"; continue
-              fi
-              MUTANT_DIR="reports/cpp-mutants/${STEM}"
-              mkdir -p "$MUTANT_DIR"
-              INCLUDES="-I. -I${DIR} -I$(dirname "$DIR")"
-              echo "========================================" | tee -a "$LOG"
-              echo "Mutating: $SRC | Test: $TEST_FILE"       | tee -a "$LOG"
-              mutate "$SRC" --mutantDir "$MUTANT_DIR" >> "$LOG" 2>&1 || true
-              MCOUNT=$(find "$MUTANT_DIR" \( -name '*.cpp' -o -name '*.cc' \) | wc -l)
-              echo "Generated $MCOUNT mutants" | tee -a "$LOG"
-              g++ -std=c++17 -Wall $INCLUDES -o /tmp/orig_cpp_test "$SRC" "$TEST_FILE" >> "$LOG" 2>&1
-              if [ $? -ne 0 ]; then
-                echo "BASELINE COMPILE FAIL — skip" | tee -a "$LOG"; continue
-              fi
-              /tmp/orig_cpp_test >> "$LOG" 2>&1; BASELINE=$?
-              echo "Baseline exit: $BASELINE" | tee -a "$LOG"
-              for MUTANT in "$MUTANT_DIR"/*.cpp "$MUTANT_DIR"/*.cc; do
-                [ -f "$MUTANT" ] || continue
-                TOTAL=$((TOTAL + 1))
-                MID_FULL=$(basename "$MUTANT"); MID="${MID_FULL%.*}"
-                g++ -std=c++17 -Wall $INCLUDES -o /tmp/mut_cpp_test "$MUTANT" "$TEST_FILE" >> "$LOG" 2>&1
-                if [ $? -ne 0 ]; then
-                  KILLED=$((KILLED + 1)); echo "[KILLED-COMPILE] $MID" | tee -a "$LOG"; continue
-                fi
-                /tmp/mut_cpp_test >> "$LOG" 2>&1; RUN_EXIT=$?
-                if [ "$RUN_EXIT" -ne "$BASELINE" ]; then
-                  KILLED=$((KILLED + 1)); echo "[KILLED] $MID" | tee -a "$LOG"
-                else
-                  SURVIVED=$((SURVIVED + 1)); echo "[SURVIVED] $MID" | tee -a "$LOG"
-                  diff "$SRC" "$MUTANT" > "$MUTANT_DIR/${MID}.diff" 2>/dev/null || true
-                fi
-              done
-            done
-          fi
-          SCORE=$(python3 -c "print(round($KILLED/$TOTAL*100,2) if $TOTAL>0 else 0.0)" || echo 0)
-          echo "C++ mutation: killed=$KILLED survived=$SURVIVED total=$TOTAL score=$SCORE%" | tee -a "$LOG"
-          { echo "killed=$KILLED"; echo "survived=$SURVIVED"
-            echo "total=$TOTAL";   echo "score=$SCORE"; } >> "$GITHUB_OUTPUT"
-          set -e
+        run: bash project-sources/scripts/mutate-cpp.sh
       - name: Upload C++ mutation artifacts
         if: always()
         uses: actions/upload-artifact@v6

@@ -11,6 +11,11 @@ Scenarios covered:
   is_special_name   — World, non-World, empty, mixed-case
 """
 
+import sys
+from pathlib import Path
+
+# Import source modules from sibling src/ directory
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import hello
 
 

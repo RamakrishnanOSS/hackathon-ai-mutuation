@@ -331,66 +331,144 @@ export function activate(context: vscode.ExtensionContext) {
 
   outputChannel.appendLine("AI Mutation Testing Extension is active.");
 
+  // ── Project and build system context (for multi-project support) ──
+  let projectPath: string = "";
+  let buildSystem: string = "auto";
+
   // ── Developer instructions context (captured before generating mutations) ──
   let developerInstructions: string = "";
   let focusArea: string = "";
   let testStrategy: string = "";
+  let contextOperators: string[] = [
+    "relational_operator_replacement",
+    "arithmetic_substitution",
+    "boundary_value_tweak",
+    "boolean_inversion",
+    "return_value_stripping"
+  ];
 
   // ══════════════════════════════════════════════════════════════
-  // Command 0: Capture Developer Instructions for Mutation Generation
+  // Command 0: Integrated Mutation Configuration Wizard
+  // Steps: Project Selection → Operator Types → Developer Instructions → Focus Area → Test Strategy
   // ══════════════════════════════════════════════════════════════
+
+  // Backward-compat stubs so any external callers of the old commands still work
   let setDeveloperInstructions = vscode.commands.registerCommand('mutation.setDeveloperInstructions', async () => {
-    const instructions = await vscode.window.showInputBox({
-      placeHolder: "e.g., Focus on boundary conditions, edge cases with array indices, or specific function behaviors",
-      prompt: "Provide instructions to guide mutation generation (Ollama will use this context):",
-      title: "Developer Instructions for AI Mutation Engine"
-    });
-
-    if (instructions !== undefined) {
-      developerInstructions = instructions;
-      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
-      if (developerInstructions.trim().length > 0) {
-        outputChannel.appendLine(`📝 Developer Instructions captured: "${developerInstructions}"`);
-        vscode.window.showInformationMessage(`Developer instructions saved. Next mutation generation will use this context.`);
-      } else {
-        vscode.window.showInformationMessage(`Developer instructions cleared.`);
-      }
-    }
+    vscode.commands.executeCommand('mutation.configureMutationFlow');
   });
-
-  // Capture focus area
   let setFocusArea = vscode.commands.registerCommand('mutation.setFocusArea', async () => {
-    const area = await vscode.window.showQuickPick([
-      { label: "Edge Cases", description: "Focus on boundary conditions and edge cases" },
-      { label: "Performance", description: "Generate mutations testing performance implications" },
-      { label: "Logic", description: "Focus on logical operators and conditionals" },
-      { label: "Return Values", description: "Mutations involving return value modifications" },
-      { label: "All", description: "Generate all types of mutations" }
-    ], { title: "Select Focus Area" });
-
-    if (area) {
-      focusArea = area.label;
-      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
-      outputChannel.appendLine(`🎯 Focus Area set to: ${focusArea}`);
-      vscode.window.showInformationMessage(`Focus area set to "${focusArea}". This will guide mutation generation.`);
-    }
+    vscode.commands.executeCommand('mutation.configureMutationFlow');
+  });
+  let setTestStrategy = vscode.commands.registerCommand('mutation.setTestStrategy', async () => {
+    vscode.commands.executeCommand('mutation.configureMutationFlow');
   });
 
-  // Capture test strategy
-  let setTestStrategy = vscode.commands.registerCommand('mutation.setTestStrategy', async () => {
-    const strategy = await vscode.window.showQuickPick([
-      { label: "Branch Coverage", description: "Generate mutations targeting branch coverage" },
-      { label: "Statement Coverage", description: "Generate mutations for statement coverage" },
-      { label: "Path Coverage", description: "Generate mutations for path coverage" },
-      { label: "Comprehensive", description: "Comprehensive mutation testing strategy" }
-    ], { title: "Select Test Strategy" });
+  let configureMutationFlow = vscode.commands.registerCommand('mutation.configureMutationFlow', async () => {
+    const TOTAL_STEPS = 5;
 
-    if (strategy) {
-      testStrategy = strategy.label;
-      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
-      outputChannel.appendLine(`📊 Test Strategy set to: ${testStrategy}`);
-      vscode.window.showInformationMessage(`Test strategy set to "${testStrategy}".`);
+    // ── Step 0: Project Selection ───────────────────────────────
+    const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!wsDir) {
+      vscode.window.showErrorMessage("Open a workspace folder to configure mutations.");
+      return;
     }
+
+    const projectOptions = [
+      { label: "Python Project (py-src)", description: "Python example project with pytest", value: "py-src" },
+      { label: "C/C++ Project (c-src)",   description: "C/C++ example project with CMake", value: "c-src" },
+      { label: "Custom Project Path",    description: "Select a custom project directory",    value: "custom" }
+    ];
+    const chosenProject = await vscode.window.showQuickPick(projectOptions, {
+      placeHolder: "Select project or workspace to mutate",
+      title: `(0/${TOTAL_STEPS}) Project Selection`
+    });
+    if (chosenProject === undefined) { return; }
+
+    let selectedProjectPath = wsDir;
+    let detectedBuildSystem = "auto";
+
+    if (chosenProject.value === "py-src" || chosenProject.value === "c-src") {
+      selectedProjectPath = path.join(wsDir, chosenProject.value);
+    } else if (chosenProject.value === "custom") {
+      const customPath = await vscode.window.showInputBox({
+        value: wsDir,
+        placeHolder: "e.g., /path/to/project or relative/path/to/project",
+        prompt: "Enter project path (absolute or relative to workspace)",
+        title: `(0/${TOTAL_STEPS}) Custom Project Path`
+      });
+      if (customPath === undefined) { return; }
+      selectedProjectPath = customPath;
+    }
+
+    projectPath = selectedProjectPath;
+    outputChannel.appendLine(`📁 Selected project: ${projectPath}`);
+
+    // ── Step 1: Mutation Operator Types ────────────────────────
+    const operatorOptions = [
+      { label: "Relational Operator Replacement", description: "Swap relational operators (< <= >= > == !=", value: "relational_operator_replacement", picked: contextOperators.includes("relational_operator_replacement") },
+      { label: "Arithmetic Substitution",         description: "Swap arithmetic operators (+ - * /)",           value: "arithmetic_substitution",         picked: contextOperators.includes("arithmetic_substitution") },
+      { label: "Boundary Value Tweaks",           description: "Adjust numeric boundary literals (e.g. 10→11)",  value: "boundary_value_tweak",             picked: contextOperators.includes("boundary_value_tweak") },
+      { label: "Boolean Inversion",               description: "Invert logical connectors/literals (and↔or)",    value: "boolean_inversion",               picked: contextOperators.includes("boolean_inversion") },
+      { label: "Return Value Stripping",          description: "Strip or neutralize explicit return expressions", value: "return_value_stripping",           picked: contextOperators.includes("return_value_stripping") }
+    ];
+    const chosenOps = await vscode.window.showQuickPick(operatorOptions, {
+      canPickMany: true,
+      placeHolder: "Select mutation operator types to enable",
+      title: `(1/${TOTAL_STEPS}) Mutation Operator Types`
+    });
+    if (chosenOps === undefined) { return; }
+    contextOperators = chosenOps.length > 0
+      ? chosenOps.map(op => op.value)
+      : ["relational_operator_replacement", "arithmetic_substitution", "boundary_value_tweak", "boolean_inversion", "return_value_stripping"];
+
+    // ── Step 2: Developer Instructions ─────────────────────────
+    const instructions = await vscode.window.showInputBox({
+      value: developerInstructions,
+      placeHolder: "e.g., Focus on boundary conditions, edge cases with array indices…",
+      prompt: "Free-text guidance for the AI mutation engine (leave blank to skip)",
+      title: `(2/${TOTAL_STEPS}) Developer Instructions`
+    });
+    if (instructions === undefined) { return; }
+    developerInstructions = instructions;
+
+    // ── Step 3: Focus Area ──────────────────────────────────────
+    const focusOptions = [
+      { label: "Edge Cases",    description: "Boundary conditions and edge cases",             picked: focusArea === "Edge Cases" },
+      { label: "Performance",   description: "Mutations testing performance implications",      picked: focusArea === "Performance" },
+      { label: "Logic",         description: "Logical operators and conditionals",               picked: focusArea === "Logic" },
+      { label: "Return Values", description: "Mutations involving return value modifications",  picked: focusArea === "Return Values" },
+      { label: "All",           description: "Generate all types of mutations",                 picked: focusArea === "All" || focusArea === "" }
+    ];
+    const chosenFocus = await vscode.window.showQuickPick(focusOptions, {
+      placeHolder: "Select a mutation focus area",
+      title: `(3/${TOTAL_STEPS}) Focus Area`
+    });
+    if (chosenFocus === undefined) { return; }
+    focusArea = chosenFocus.label;
+
+    // ── Step 4: Test Strategy ───────────────────────────────────
+    const strategyOptions = [
+      { label: "Branch Coverage",    description: "Mutations targeting branch coverage",      picked: testStrategy === "Branch Coverage" },
+      { label: "Statement Coverage", description: "Mutations for statement coverage",         picked: testStrategy === "Statement Coverage" },
+      { label: "Path Coverage",      description: "Mutations for path coverage",              picked: testStrategy === "Path Coverage" },
+      { label: "Comprehensive",      description: "Comprehensive mutation testing strategy",  picked: testStrategy === "Comprehensive" || testStrategy === "" }
+    ];
+    const chosenStrategy = await vscode.window.showQuickPick(strategyOptions, {
+      placeHolder: "Select a test strategy",
+      title: `(4/${TOTAL_STEPS}) Test Strategy`
+    });
+    if (chosenStrategy === undefined) { return; }
+    testStrategy = chosenStrategy.label;
+
+    treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
+    outputChannel.appendLine(`⚙️ Mutation context configured:`);
+    outputChannel.appendLine(`   • Operators:     ${contextOperators.join(', ')}`);
+    outputChannel.appendLine(`   • Instructions:  ${developerInstructions || '(none)'}`);
+    outputChannel.appendLine(`   • Focus Area:    ${focusArea}`);
+    outputChannel.appendLine(`   • Test Strategy: ${testStrategy}`);
+    vscode.window.showInformationMessage(
+      `Mutation context saved — Operators: ${contextOperators.length}, Focus: ${focusArea}, Strategy: ${testStrategy}`
+    );
   });
 
   // Clear all developer context
@@ -398,6 +476,13 @@ export function activate(context: vscode.ExtensionContext) {
     developerInstructions = "";
     focusArea = "";
     testStrategy = "";
+    contextOperators = [
+      "relational_operator_replacement",
+      "arithmetic_substitution",
+      "boundary_value_tweak",
+      "boolean_inversion",
+      "return_value_stripping"
+    ];
     treeDataProvider.setDeveloperContext("", "", "");
     outputChannel.appendLine(`🗑️ All developer context cleared.`);
     vscode.window.showInformationMessage(`Developer context cleared.`);
@@ -414,6 +499,9 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
+    // Use selected project path if available, otherwise fall back to workspace
+    const activeProjectPath = projectPath || wsDir;
+
     const activeYaml = loadYamlConfig(wsDir);
     const config = vscode.workspace.getConfiguration('mutationTesting');
     const backendUrl = activeYaml.coreUrl || config.get<string>('coreServiceUrl', 'http://core-service:8000');
@@ -422,7 +510,8 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.show(true); 
     outputChannel.appendLine("\n=================================================");
     outputChannel.appendLine("🧪 Initiating Golden Master baseline tests execution...");
-    outputChannel.appendLine(`   • Workspace: ${wsDir}`);
+    outputChannel.appendLine(`   • Project: ${activeProjectPath}`);
+    outputChannel.appendLine(`   • Build System: ${buildSystem}`);
     outputChannel.appendLine(`   • Core URL: ${backendUrl}`);
     outputChannel.appendLine("=================================================");
 
@@ -433,6 +522,8 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine(`   • Test runner: ${runnerType} (backend will auto-detect available runners)`);
 
       const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/test-runs/baseline`, {
+        projectPath: activeProjectPath,
+        buildSystem: buildSystem,
         workspaceDir: wsDir,
         testRunner: runnerType
       });
@@ -503,18 +594,15 @@ export function activate(context: vscode.ExtensionContext) {
     const wsDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!wsDir) { return; }
 
+    // Use selected project path if available, otherwise fall back to workspace
+    const activeProjectPath = projectPath || wsDir;
+
     const config = loadYamlConfig(wsDir);
     const backendUrl = config.coreUrl;
     const aiProvider = vscode.workspace.getConfiguration('mutationTesting').get<string>('aiProvider', 'mock');
 
     let targetFiles: string[] = [];
-    let selectedOperators: string[] = [
-      "relational_operator_replacement",
-      "arithmetic_substitution",
-      "boundary_value_tweak",
-      "boolean_inversion",
-      "return_value_stripping"
-    ];
+    let selectedOperators: string[] = [...contextOperators];
 
     if (item && item.typeKey && item.typeKey.startsWith('file_child:')) {
       targetFiles = [item.typeKey.substring(11)];
@@ -560,31 +648,14 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       targetFiles = chosenFiles.map(item => item.label);
-
-      // Present interactive list selector of custom mutation operators to parse
-      const operatorOptions = [
-        { label: "Relational Operator Replacement", description: "Swap relational operators (< <= >= > == !=)", value: "relational_operator_replacement", picked: true },
-        { label: "Arithmetic Substitution", description: "Swap arithmetic operators (+ - * /)", value: "arithmetic_substitution", picked: true },
-        { label: "Boundary Value Tweaks", description: "Adjust numeric boundary literals (e.g. 10 -> 11)", value: "boundary_value_tweak", picked: true },
-        { label: "Boolean Inversion", description: "Invert logical connectors/literals (and-or, true-false, not)", value: "boolean_inversion", picked: true },
-        { label: "Return Value Stripping", description: "Strip or neutralize explicit return expressions", value: "return_value_stripping", picked: true }
-      ];
-
-      const chosenOps = await vscode.window.showQuickPick(operatorOptions, {
-        canPickMany: true,
-        placeHolder: "Select mutation operator types to scan for (press Enter to choose all)",
-        title: "🧬 Pluggable Operator Type Selection"
-      });
-
-      if (chosenOps && chosenOps.length > 0) {
-        selectedOperators = chosenOps.map(op => op.value);
-      }
     }
 
     statusBarItem.text = "🧬 Scanning AST...";
     outputChannel.show(true);
     outputChannel.appendLine("\n=================================================");
     outputChannel.appendLine(`🧬 Initiating AST Scan for Files: ${targetFiles.join(', ')}`);
+    outputChannel.appendLine(`   • Project: ${activeProjectPath}`);
+    outputChannel.appendLine(`   • Build System: ${buildSystem}`);
     outputChannel.appendLine(`   • Operators: ${selectedOperators.join(', ')}`);
     outputChannel.appendLine(`   • AI Prioritizer: ${aiProvider}`);
     if (developerInstructions) {
@@ -600,6 +671,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     try {
       const generatePayload: any = {
+        projectPath: activeProjectPath,
+        buildSystem: buildSystem,
         workspaceDir: wsDir,
         targetFiles: targetFiles,
         operators: selectedOperators,
@@ -1559,6 +1632,7 @@ export function activate(context: vscode.ExtensionContext) {
     executeRuns,
     showDiff,
     analyzeCurrentEditor,
+    configureMutationFlow,
     setDeveloperInstructions,
     setFocusArea,
     setTestStrategy,

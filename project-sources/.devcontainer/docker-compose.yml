@@ -1,8 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# AI Mutation Testing — Dev Container Compose (agent workspace)
+# AI Mutation Testing — Dev Container Compose (project-sources workspace)
 #
-# The devcontainer workspace is agent/ — the source directory consumed by
-# the mutation engine. The core-service is built from Dockerfile.core.
+# The devcontainer workspace is project-sources/ — the common developer area
+# containing both C/C++ (c-src/) and Python (py-src/) projects.
+# The core-service is built from Dockerfile.core in mutation-engine/.
 #
 # Services:
 #   - devcontainer:   VS Code dev environment (Python 3.11, Node 20, build-essential)
@@ -21,9 +22,9 @@ services:
   devcontainer:
     build:
       context: ../..                 # project root as build context
-      dockerfile: agent/.devcontainer/Dockerfile
+      dockerfile: project-sources/.devcontainer/Dockerfile
     volumes:
-      - ..:/workspace:cached         # live-mount agent/ as /workspace
+      - ..:/workspace:cached         # live-mount project-sources/ as /workspace
     networks:
       - mutation-net
     depends_on:
@@ -37,7 +38,7 @@ services:
   # ── Core mutation service (from Dockerfile.core) ───────────
   core-service:
     build:
-      context: ../..                 # project root as build context
+      context: ../../mutation-engine  # mutation-engine as build context
       dockerfile: Dockerfile.core
     ports:
       - "8001:8000"
@@ -47,5 +48,5 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
-      - ..:/app:cached               # live-mount project root for hot-reload
+      - ..:/workspace:cached               # live-mount project-sources/ as /workspace
     command: python3 services/core_mutation_service.py

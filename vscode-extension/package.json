@@ -43,24 +43,14 @@
     "menus": {
       "view/title": [
         {
-          "command": "mutation.setDeveloperInstructions",
+          "command": "mutation.configureMutationFlow",
           "when": "view == mutation-explorer",
           "group": "inline@0"
         },
         {
-          "command": "mutation.setFocusArea",
-          "when": "view == mutation-explorer",
-          "group": "inline@1"
-        },
-        {
-          "command": "mutation.setTestStrategy",
-          "when": "view == mutation-explorer",
-          "group": "inline@2"
-        },
-        {
           "command": "mutation.clearDeveloperContext",
           "when": "view == mutation-explorer",
-          "group": "inline@3"
+          "group": "inline@1"
         },
         {
           "command": "mutation.runBaseline",
@@ -239,6 +229,12 @@
         "command": "mutation.generateReport",
         "title": "Generate Mutation Report",
         "icon": "$(report)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.configureMutationFlow",
+        "title": "Configure Mutation Context",
+        "icon": "$(settings-gear)",
         "category": "Mutation Testing"
       },
       {

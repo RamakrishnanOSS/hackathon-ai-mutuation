@@ -1,0 +1,48 @@
+# Build outputs
+build/
+dist/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+
+# CMake
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+*.cmake
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+.venv/
+venv/
+*.egg
+.pytest_cache/
+.tox/
+htmlcov/
+.coverage
+
+# Mutation testing
+.mutmut-cache
+mutmut_results/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Dependencies
+node_modules/
+
+# Test outputs
+*.log
+test_results/

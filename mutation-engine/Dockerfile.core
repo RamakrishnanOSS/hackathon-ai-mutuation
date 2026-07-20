@@ -24,9 +24,13 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # ── Application source ────────────────────────────────────────
 WORKDIR /app
 COPY services/*.py ./services/
+COPY services/build_system ./services/build_system/
+COPY services/grafana ./services/grafana/
+COPY services/prometheus.yml ./services/
 
 # ── Runtime ───────────────────────────────────────────────────
 EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
+CMD ["python", "services/core_mutation_service.py"]
 
 CMD ["python3", "services/core_mutation_service.py"]
