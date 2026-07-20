@@ -4,6 +4,10 @@
   "description": "Visual Studio Code integration for AI-powered mutation testing, sandbox execution, and test synthesis.",
   "version": "1.0.0",
   "publisher": "hackathon-ai",
+  "repository": {
+    "type": "git",
+    "url": "/home/per9kor/hack/hackathon-ai-mutuation"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

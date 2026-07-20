@@ -13,7 +13,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 networks:
   mutation-net:
-    driver: bridge
+    external: true
 
 services:
 
@@ -40,7 +40,7 @@ services:
       context: ../..                 # project root as build context
       dockerfile: Dockerfile.core
     ports:
-      - "8000:8000"
+      - "8001:8000"
     networks:
       - mutation-net
     environment:
