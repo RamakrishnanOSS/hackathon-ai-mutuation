@@ -6,6 +6,7 @@ housing state registries, parallel workers pools, and metrics collectors.
 """
 
 import os
+import re
 import uuid
 import tempfile
 from typing import Dict, Any, List, Optional
@@ -264,16 +265,29 @@ def execute_baseline(projectId: str, payload: BaselineRequest):
         
         # Step 2: Run tests
         test_result = build_adapter.run_tests()
-        
+
+        # Parse individual test names from verbose pytest output
+        individual_tests = []
+        if test_result.stdout:
+            for line in test_result.stdout.splitlines():
+                # pytest -v lines: "tests/test_foo.py::TestClass::test_method PASSED"
+                m = re.search(r'^\s*([\w/.\-]+::[\w:]+)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)', line)
+                if m:
+                    individual_tests.append({
+                        "name": m.group(1),
+                        "status": m.group(2),
+                        "durationMs": 0
+                    })
+
         final_res = {
             "overallStatus": "TESTS_PASSED" if test_result.all_passed else "TESTS_FAILED",
             "killingTest": None,
             "failureOutput": test_result.stderr if not test_result.all_passed else "",
-            "durationMs": 0,  # CTest doesn't provide granular timing
+            "durationMs": 0,
             "testsPassed": test_result.tests_passed,
             "testsFailed": test_result.tests_failed,
             "totalTests": test_result.total_tests,
-            "tests": [],  # Granular test details would come from test runner
+            "tests": individual_tests,
             "buildSystem": build_adapter.__class__.__name__,
             "projectPath": project_path
         }

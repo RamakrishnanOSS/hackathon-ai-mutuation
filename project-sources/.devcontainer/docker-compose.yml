@@ -14,7 +14,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 networks:
   mutation-net:
-    external: true
+    external: true  # created and owned by mutation-engine/docker-compose.yml
 
 services:
 
@@ -49,4 +49,5 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - ..:/workspace:cached               # live-mount project-sources/ as /workspace
+      - ../../mutation-engine/services:/app/services:cached  # live-mount services for hot-reload
     command: python3 services/core_mutation_service.py

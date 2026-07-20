@@ -650,6 +650,24 @@ export function activate(context: vscode.ExtensionContext) {
       targetFiles = chosenFiles.map(item => item.label);
     }
 
+    // ── Developer Instructions (inline prompt) ─────────────────
+    // Always surface the instructions step inside the scan flow so
+    // the user can confirm, edit, or clear them without running the
+    // separate configureMutationFlow wizard first.
+    const instructionInput = await vscode.window.showInputBox({
+      value: developerInstructions,
+      placeHolder: "e.g., Focus on boundary conditions, array index edge cases…",
+      prompt: developerInstructions
+        ? `Developer instructions (currently set — edit or leave as-is)`
+        : `Developer instructions for AI engine — describe focus areas (leave blank to skip)`,
+      title: "🧬 Developer Instructions (optional)"
+    });
+    // undefined = user pressed Escape → keep previous value; empty string = explicitly cleared
+    if (instructionInput !== undefined) {
+      developerInstructions = instructionInput;
+      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
+    }
+
     statusBarItem.text = "🧬 Scanning AST...";
     outputChannel.show(true);
     outputChannel.appendLine("\n=================================================");
