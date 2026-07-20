@@ -58,6 +58,32 @@ function normalizeWorkspacePath(workspaceRoot: string, filePath: string): string
   return normalized.replace(/^\.\//, '');
 }
 
+function normalizeTargetPathForProject(workspaceRoot: string, projectRoot: string, filePath: string): string {
+  const normalizedInput = (filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalizedInput) {
+    return normalizedInput;
+  }
+
+  const absoluteCandidate = path.isAbsolute(normalizedInput)
+    ? normalizedInput
+    : path.resolve(workspaceRoot, normalizedInput);
+  const projectAbs = path.resolve(projectRoot);
+
+  const relToProject = path.relative(projectAbs, absoluteCandidate).replace(/\\/g, '/');
+  if (relToProject && !relToProject.startsWith('..')) {
+    return relToProject.replace(/^\.\//, '');
+  }
+
+  // If a workspace-relative path includes the project root folder name prefix,
+  // strip it to avoid duplicating segments when backend joins with projectPath.
+  const projectFolderName = path.basename(projectAbs).replace(/\\/g, '/');
+  if (normalizedInput.startsWith(`${projectFolderName}/`)) {
+    return normalizedInput.substring(projectFolderName.length + 1);
+  }
+
+  return normalizedInput;
+}
+
 function currentEditorMutants(editor: vscode.TextEditor): any[] {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceRoot) {
@@ -388,7 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
     let detectedBuildSystem = "auto";
 
     if (chosenProject.value === "py-src" || chosenProject.value === "c-src") {
-      selectedProjectPath = path.join(wsDir, chosenProject.value);
+      selectedProjectPath = path.join(wsDir, 'project-sources', chosenProject.value);
     } else if (chosenProject.value === "custom") {
       const customPath = await vscode.window.showInputBox({
         value: wsDir,
@@ -650,6 +676,8 @@ export function activate(context: vscode.ExtensionContext) {
       targetFiles = chosenFiles.map(item => item.label);
     }
 
+    targetFiles = targetFiles.map(filePath => normalizeTargetPathForProject(wsDir, activeProjectPath, filePath));
+
     // ── Developer Instructions (inline prompt) ─────────────────
     // Always surface the instructions step inside the scan flow so
     // the user can confirm, edit, or clear them without running the
@@ -725,7 +753,9 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine(`✅ AST Scan completed successfully!`);
       outputChannel.appendLine(`   • Total Candidates Parsed: ${activeMutantsList.length}`);
       activeMutantsList.forEach((m: any) => {
-        outputChannel.appendLine(`     - ${m.mutant_id}: Line ${m.line_number} | Operator: [${m.operator_type}] | Replacement: '${m.original_code}' ➜ '${m.mutated_value}'`);
+        const score = typeof m.priority_score === 'number' ? ` | Score: ${m.priority_score.toFixed(2)}` : '';
+        const boost = typeof m.context_boost === 'number' ? ` | Context Boost: +${m.context_boost.toFixed(2)}` : '';
+        outputChannel.appendLine(`     - ${m.mutant_id}: Line ${m.line_number} | Operator: [${m.operator_type}] | Priority: ${m.priority || 'N/A'}${score}${boost} | Replacement: '${m.original_code}' ➜ '${m.mutated_value}'`);
       });
       outputChannel.appendLine("=================================================");
 
@@ -1316,7 +1346,7 @@ export function activate(context: vscode.ExtensionContext) {
       clearInterval(dashboardRefreshTimer);
     });
 
-    // Dynamic, interactive SVG Live charts dashboard inside VS Code webview. Includes live connection to local Prometheus stats on :8000!
+    // Dynamic dashboard rendered as a webview. Metrics are streamed from the extension host.
     panel.webview.html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1366,18 +1396,6 @@ export function activate(context: vscode.ExtensionContext) {
       color: var(--vscode-editor-foreground);
       border-bottom: 1px dashed var(--vscode-widget-border);
       padding-bottom: 4px;
-
-      const valueNodes = {
-        vulnScore: document.getElementById('vulnScore'),
-        activeDebt: document.getElementById('activeDebt'),
-        generatedMutants: document.getElementById('generatedMutants'),
-        acceptedMutants: document.getElementById('acceptedMutants'),
-        baselineRuns: document.getElementById('baselineRuns'),
-        aiGenerated: document.getElementById('aiGenerated'),
-        sandboxTestsRun: document.getElementById('sandboxTestsRun'),
-        sandboxTestsPassed: document.getElementById('sandboxTestsPassed'),
-        sandboxTestsFailed: document.getElementById('sandboxTestsFailed')
-      };
       margin-bottom: 6px;
     }
     .metric {
@@ -1385,115 +1403,122 @@ export function activate(context: vscode.ExtensionContext) {
       font-weight: bold;
       text-align: center;
       margin: 6px 0;
-      const applyMetricsSnapshot = (metrics) => {
-        if (metrics.vulnScore !== null && metrics.vulnScore !== undefined) {
-          valueNodes.vulnScore.innerText = metrics.vulnScore + '%';
-        }
-        if (metrics.activeDebt !== null && metrics.activeDebt !== undefined) {
-          valueNodes.activeDebt.innerText = metrics.activeDebt + ' Mutants';
-          valueNodes.activeDebt.style.color = metrics.activeDebt > 0 ? '#ff9800' : '#4caf50';
-        }
-        if (metrics.generatedMutants !== null && metrics.generatedMutants !== undefined) {
-          valueNodes.generatedMutants.innerText = metrics.generatedMutants;
-        }
-        if (metrics.acceptedMutants !== null && metrics.acceptedMutants !== undefined) {
-          valueNodes.acceptedMutants.innerText = metrics.acceptedMutants;
-        }
-        if (metrics.baselineRuns !== null && metrics.baselineRuns !== undefined) {
-          valueNodes.baselineRuns.innerText = metrics.baselineRuns;
-        }
-        if (metrics.aiGenerated !== null && metrics.aiGenerated !== undefined) {
-          valueNodes.aiGenerated.innerText = metrics.aiGenerated;
-        }
-        if (metrics.sandboxTestsRun !== null && metrics.sandboxTestsRun !== undefined) {
-          valueNodes.sandboxTestsRun.innerText = metrics.sandboxTestsRun;
-        }
-        if (metrics.sandboxTestsPassed !== null && metrics.sandboxTestsPassed !== undefined) {
-          valueNodes.sandboxTestsPassed.innerText = metrics.sandboxTestsPassed;
-        }
-        if (metrics.sandboxTestsFailed !== null && metrics.sandboxTestsFailed !== undefined) {
-          valueNodes.sandboxTestsFailed.innerText = metrics.sandboxTestsFailed;
-        }
-      };
+    }
+    .desc {
+      margin: 0;
+      font-size: 0.85em;
+      opacity: 0.85;
+      text-align: center;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 12px;
+    }
+    .badge {
+      font-size: 0.75em;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 999px;
+      color: #fff;
+      background: #607d8b;
+    }
+    .status-text {
+      font-size: 0.85em;
+      opacity: 0.9;
+    }
+    iframe {
+      width: 100%;
+      height: 260px;
+      border: 1px solid var(--vscode-widget-border);
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mutation Observability Dashboard</h1>
+  <div class="status-row">
+    <span id="connectionStatus" class="badge">CONNECTING</span>
+    <span id="connectionStatusText" class="status-text">Waiting for initial metrics snapshot...</span>
+  </div>
 
-      window.addEventListener('message', event => {
-        const message = event.data;
-        if (!message || message.type !== 'mutation-metrics') {
-          return;
-        }
-
-        if (message.connected) {
-          setConnectionState('CONNECTED', message.statusText || 'Prometheus metrics stream is responding.', '#4caf50');
-        } else {
-          setConnectionState('DISCONNECTED', message.statusText || 'Unable to reach Prometheus from the extension host. Check the container stack and published ports.', '#f44336');
-        }
-
-        if (message.metrics) {
-          applyMetricsSnapshot(message.metrics);
-        }
-      });
-    </div>
-
+  <div class="section-title">Risk And Mutation Throughput</div>
+  <div class="grid">
     <div class="card">
-
-      void publishMetricsSnapshot();
+      <h3>Mutation Vulnerability Score</h3>
+      <div class="metric" id="vulnScore" style="color: #f44336;">0%</div>
+      <p class="desc">Higher values indicate broader mutation exposure.</p>
+    </div>
+    <div class="card">
+      <h3>Active Mutation Debt</h3>
+      <div class="metric" id="activeDebt" style="color: #ff9800;">0 Mutants</div>
+      <p class="desc">Surviving mutants that still need stronger tests.</p>
+    </div>
+    <div class="card">
       <h3>Total Generated Mutants</h3>
       <div class="metric" id="generatedMutants" style="color: #2196f3;">0</div>
-      <p class="desc">Candidates compiled via AST trees.</p>
+      <p class="desc">Candidates compiled via AST parsing.</p>
     </div>
-
     <div class="card">
       <h3>AI Tests Generated</h3>
       <div class="metric" id="aiGenerated" style="color: #00bcd4;">0</div>
-      <p class="desc">Targeted unit tests synthesized by LLMs.</p>
+      <p class="desc">Targeted tests synthesized by AI.</p>
     </div>
   </div>
 
-  <div class="section-title">⚙️ Isolated Sandbox & Test Execution Pipeline Statistics</div>
+  <div class="section-title">Sandbox Execution Statistics</div>
   <div class="grid">
     <div class="card">
       <h3>Baseline Runs</h3>
       <div class="metric" id="baselineRuns" style="color: #9c27b0;">0</div>
-      <p class="desc">Golden Master clean suite executions.</p>
+      <p class="desc">Golden master suite executions.</p>
     </div>
-
     <div class="card">
       <h3>Accepted Mutants</h3>
       <div class="metric" id="acceptedMutants" style="color: #4caf50;">0</div>
-      <p class="desc">Mutants accepted for verification runs.</p>
+      <p class="desc">Mutants queued for verification runs.</p>
     </div>
-
     <div class="card">
       <h3>Sandbox Tests Run</h3>
       <div class="metric" id="sandboxTestsRun" style="color: #e91e63;">0</div>
-      <p class="desc">Total checks executed in sandboxes.</p>
+      <p class="desc">Total checks executed in isolated sandboxes.</p>
     </div>
-
     <div class="card">
       <h3>Sandbox Tests Passed</h3>
       <div class="metric" id="sandboxTestsPassed" style="color: #4caf50;">0</div>
       <p class="desc">Passed checks (mutation survived).</p>
     </div>
-
     <div class="card">
       <h3>Sandbox Tests Failed</h3>
       <div class="metric" id="sandboxTestsFailed" style="color: #f44336;">0</div>
-      <p class="desc">Failed checks (mutation killed successfully).</p>
+      <p class="desc">Failed checks (mutation killed).</p>
     </div>
   </div>
 
   <div class="card" style="margin-top: 16px;">
-    <h3 style="font-size: 0.9em; margin-bottom: 4px;">📊 Local Prometheus/Grafana Embedded Telemetry</h3>
+    <h3 style="font-size: 0.9em; margin-bottom: 4px;">Local Grafana Panel</h3>
     <p style="font-size: 0.8em; opacity: 0.8; margin-bottom: 8px; margin-top: 4px;">
-      Exposes the live, reactive Grafana monitoring suite running inside your Dev Container or localhost loopback port <code style="background:var(--vscode-textBlockCode-background); padding:1px 3px;">:3000</code>.
+      Embedded panel from your Grafana instance.
     </p>
-    <!-- Live iframe load of local Grafana setup, with local HTML chart rendering fallback if Grafana container is offline -->
     <iframe src="${grafUrl}/d-solo/mutation-performance/mutation-metrics?orgId=1&panelId=1&refresh=5s" onerror="this.style.display='none';"></iframe>
   </div>
 
   <script>
     const connectionStatus = document.getElementById('connectionStatus');
     const connectionStatusText = document.getElementById('connectionStatusText');
+    const valueNodes = {
+      vulnScore: document.getElementById('vulnScore'),
+      activeDebt: document.getElementById('activeDebt'),
+      generatedMutants: document.getElementById('generatedMutants'),
+      acceptedMutants: document.getElementById('acceptedMutants'),
+      baselineRuns: document.getElementById('baselineRuns'),
+      aiGenerated: document.getElementById('aiGenerated'),
+      sandboxTestsRun: document.getElementById('sandboxTestsRun'),
+      sandboxTestsPassed: document.getElementById('sandboxTestsPassed'),
+      sandboxTestsFailed: document.getElementById('sandboxTestsFailed')
+    };
 
     const setConnectionState = (state, label, color) => {
       connectionStatus.innerText = state;
@@ -1501,9 +1526,58 @@ export function activate(context: vscode.ExtensionContext) {
       connectionStatusText.innerText = label;
     };
 
+    const applyMetricsSnapshot = (metrics) => {
+      if (metrics.vulnScore !== null && metrics.vulnScore !== undefined) {
+        valueNodes.vulnScore.innerText = metrics.vulnScore + '%';
+      }
+      if (metrics.activeDebt !== null && metrics.activeDebt !== undefined) {
+        valueNodes.activeDebt.innerText = metrics.activeDebt + ' Mutants';
+        valueNodes.activeDebt.style.color = metrics.activeDebt > 0 ? '#ff9800' : '#4caf50';
+      }
+      if (metrics.generatedMutants !== null && metrics.generatedMutants !== undefined) {
+        valueNodes.generatedMutants.innerText = metrics.generatedMutants;
+      }
+      if (metrics.acceptedMutants !== null && metrics.acceptedMutants !== undefined) {
+        valueNodes.acceptedMutants.innerText = metrics.acceptedMutants;
+      }
+      if (metrics.baselineRuns !== null && metrics.baselineRuns !== undefined) {
+        valueNodes.baselineRuns.innerText = metrics.baselineRuns;
+      }
+      if (metrics.aiGenerated !== null && metrics.aiGenerated !== undefined) {
+        valueNodes.aiGenerated.innerText = metrics.aiGenerated;
+      }
+      if (metrics.sandboxTestsRun !== null && metrics.sandboxTestsRun !== undefined) {
+        valueNodes.sandboxTestsRun.innerText = metrics.sandboxTestsRun;
+      }
+      if (metrics.sandboxTestsPassed !== null && metrics.sandboxTestsPassed !== undefined) {
+        valueNodes.sandboxTestsPassed.innerText = metrics.sandboxTestsPassed;
+      }
+      if (metrics.sandboxTestsFailed !== null && metrics.sandboxTestsFailed !== undefined) {
+        valueNodes.sandboxTestsFailed.innerText = metrics.sandboxTestsFailed;
+      }
+    };
+
+    window.addEventListener('message', event => {
+      const message = event.data;
+      if (!message || message.type !== 'mutation-metrics') {
+        return;
+      }
+
+      if (message.connected) {
+        setConnectionState('CONNECTED', message.statusText || 'Prometheus metrics stream is responding.', '#4caf50');
+      } else {
+        setConnectionState('DISCONNECTED', message.statusText || 'Unable to reach Prometheus from the extension host.', '#f44336');
+      }
+
+      if (message.metrics) {
+        applyMetricsSnapshot(message.metrics);
+      }
+    });
   </script>
 </body>
 </html>`;
+
+    void publishMetricsSnapshot();
   });
 
   // ══════════════════════════════════════════════════════════════

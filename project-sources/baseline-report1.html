@@ -1,0 +1,1317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mutation Test Report</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #21253a;
+      --border:   #2a2f45;
+      --text:     #c9d1e0;
+      --text-dim: #6b7280;
+      --blue:     #4f9cf9;
+      --green:    #4caf50;
+      --red:      #ef5350;
+      --orange:   #ffb74d;
+      --purple:   #ab47bc;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    /* ── Page shell ──────────────────────────────────────── */
+    .page-header {
+      background: linear-gradient(135deg, #1a1d27 0%, #12162a 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 28px 40px 24px;
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+    .header-logo { font-size: 2.4em; line-height: 1; }
+    .header-title { font-size: 1.6em; font-weight: 700; color: #e2e8f0; letter-spacing: -.3px; }
+    .header-meta  { font-size: .82em; color: var(--text-dim); margin-top: 4px; }
+    .header-badge {
+      margin-left: auto; align-self: center;
+      padding: 6px 18px; border-radius: 24px; font-size: .88em; font-weight: 700; letter-spacing: .5px;
+    }
+    .badge-passed { background: #1b5e20; color: #a5d6a7; border: 1px solid #2e7d32; }
+    .badge-failed { background: #b71c1c; color: #ef9a9a; border: 1px solid #c62828; }
+
+    main { padding: 32px 40px; max-width: 1400px; margin: 0 auto; }
+
+    /* ── Sections ────────────────────────────────────────── */
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      margin-bottom: 24px;
+    }
+    .section-header {
+      display: flex; align-items: flex-start; gap: 14px;
+      margin-bottom: 20px; padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-icon { font-size: 1.6em; line-height: 1; }
+    .section-title { font-size: 1.08em; font-weight: 600; color: #e2e8f0; }
+    .section-sub   { font-size: .8em; color: var(--text-dim); margin-top: 2px; }
+    .sub-heading {
+      font-size: .9em; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .8px; color: var(--text-dim);
+      margin: 22px 0 10px;
+    }
+
+    /* ── Summary stat strip ──────────────────────────────── */
+    .stat-strip {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-item {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 20px;
+      display: flex; flex-direction: column; align-items: center; min-width: 100px;
+    }
+    .stat-num  { font-size: 1.7em; font-weight: 700; line-height: 1; }
+    .stat-lbl  { font-size: .78em; color: var(--text-dim); margin-top: 4px; }
+    .killed    { color: var(--green); }
+    .survived  { color: var(--red); }
+    .pending   { color: #78909c; }
+
+    /* ── Mutation score band ──────────────────────────────── */
+    .score-band {
+      display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px 24px; margin-bottom: 22px;
+    }
+    .score-gauge { min-width: 160px; }
+    .score-value { font-size: 2.8em; font-weight: 800; line-height: 1; }
+    .score-label { font-size: .82em; color: var(--text-dim); margin-top: 4px; }
+    .score-stats { display: flex; flex-wrap: wrap; gap: 12px; flex: 1; align-items: center; }
+
+    /* ── Tables ──────────────────────────────────────────── */
+    .table-scroll { overflow-x: auto; }
+    table {
+      width: 100%; border-collapse: collapse;
+      font-size: .86em;
+    }
+    thead tr {
+      background: var(--surface2);
+      border-bottom: 2px solid var(--border);
+    }
+    th {
+      padding: 10px 14px; text-align: left;
+      font-size: .78em; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .6px;
+      color: var(--text-dim); white-space: nowrap;
+    }
+    td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr.even td { background: rgba(255,255,255,.018); }
+    tr:last-child td { border-bottom: none; }
+    tbody tr:hover td { background: rgba(79,156,249,.06); }
+    th.num, td.num { text-align: right; }
+    .mono { font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: .85em; }
+    .dim  { color: var(--text-dim); }
+    .line-num { color: var(--text-dim); font-size: .85em; }
+
+    /* ── Code chips ──────────────────────────────────────── */
+    code { border-radius: 4px; padding: 1px 6px; font-size: .84em; font-family: "SF Mono","Fira Code",Consolas,monospace; }
+    .op-type  { background: #1a237e22; color: #90caf9; border: 1px solid #1a237e55; }
+    .orig     { background: #1b5e2022; color: #a5d6a7; border: 1px solid #1b5e2044; }
+    .mut      { background: #b71c1c22; color: #ef9a9a; border: 1px solid #b71c1c44; }
+    .killing-test { font-size: .76em; color: var(--text-dim); margin-top: 3px; font-style: italic; }
+
+    /* ── Language sections ───────────────────────────────── */
+    .lang-section { margin-bottom: 28px; }
+    .lang-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px; margin-bottom: 10px;
+      background: var(--surface2); border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .lang-title  { font-size: 1em; font-weight: 700; }
+    .lang-meta   { font-size: .82em; color: var(--text-dim); margin-left: auto; }
+
+    /* ── File cards ──────────────────────────────────────── */
+    .file-card {
+      border: 1px solid var(--border); border-radius: 8px;
+      margin-bottom: 8px; overflow: hidden;
+    }
+    .file-card-fail { border-color: #b71c1c55; }
+    .file-card-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px; cursor: pointer;
+      background: var(--surface2);
+      user-select: none;
+      transition: background .15s;
+    }
+    .file-card-header:hover { background: rgba(79,156,249,.08); }
+    .file-card-icon  { font-size: .95em; flex-shrink: 0; }
+    .file-card-name  { flex: 1; font-size: .86em; color: #90caf9; }
+    .file-card-stats { display: flex; gap: 12px; font-size: .8em; flex-shrink: 0; }
+    .fc-count        { white-space: nowrap; }
+    .file-card-toggle { font-size: .75em; color: var(--text-dim); flex-shrink: 0; transition: transform .2s; }
+    .file-card-detail { display: none; border-top: 1px solid var(--border); }
+    .file-card-detail.open { display: block; }
+
+    /* ── Footer ──────────────────────────────────────────── */
+    footer {
+      text-align: center; font-size: .78em; color: var(--text-dim);
+      padding: 20px 40px 32px; border-top: 1px solid var(--border);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    function toggleDetail(id) {
+      const el = document.getElementById(id);
+      const arrow = document.getElementById(id + '-arrow');
+      if (!el) return;
+      const open = el.classList.toggle('open');
+      if (arrow) arrow.textContent = open ? '▲' : '▼';
+    }
+    // Auto-expand any file with failures on load
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.file-card-fail').forEach(card => {
+        const detail = card.querySelector('.file-card-detail');
+        const arrow  = card.querySelector('.file-card-toggle');
+        if (detail) { detail.classList.add('open'); }
+        if (arrow)  { arrow.textContent = '▲'; }
+      });
+    });
+  </script>
+
+  <!-- PAGE HEADER -->
+  <header class="page-header">
+    <div class="header-logo">🧬</div>
+    <div>
+      <div class="header-title">Mutation Test Report</div>
+      <div class="header-meta">Generated&nbsp;&nbsp;7/20/2026, 9:05:35 PM &nbsp;&middot;&nbsp; <span style="font-family:monospace;">2026-07-20T21:05:35.872Z</span></div>
+    </div>
+    <span class="header-badge badge-passed">
+      Baseline PASSED
+    </span>
+  </header>
+
+  <main>
+
+  <!-- ═══ BASELINE SUMMARY ══════════════════════════════════ -->
+  <section>
+    <div class="section-header">
+      <span class="section-icon">🧪</span>
+      <div>
+        <div class="section-title">Baseline Test Suite</div>
+        <div class="section-sub">Ground truth — all tests must pass before mutation analysis</div>
+      </div>
+    </div>
+
+    <div class="stat-strip">
+      <div class="stat-item"><span class="stat-num">116</span><span class="stat-lbl">Total Tests</span></div>
+      <div class="stat-item"><span class="stat-num killed">116</span><span class="stat-lbl">Passed</span></div>
+      <div class="stat-item"><span class="stat-num survived">0</span><span class="stat-lbl">Failed</span></div>
+      <div class="stat-item"><span class="stat-num" style="color:#4f9cf9;">116</span><span class="stat-lbl">🐍 Python</span></div>
+      <div class="stat-item"><span class="stat-num" style="color:#64b5f6;">0 ms</span><span class="stat-lbl">Duration</span></div>
+    </div>
+
+    
+    <div class="lang-section">
+      <div class="lang-header" style="border-left:3px solid #4f9cf9;">
+        <span style="font-size:1.3em;">🐍</span>
+        <span class="lang-title" style="color:#4f9cf9;">Python</span>
+        <span class="lang-meta">116 tests &nbsp;·&nbsp;
+          <span style="color:var(--green);">116 passed</span>
+          
+          &nbsp;·&nbsp; 2 files
+        </span>
+      </div>
+      
+      <div class="file-card">
+        <div class="file-card-header" onclick="toggleDetail('detail-Python-0')">
+          <span class="file-card-icon">✅</span>
+          <span class="file-card-name mono">tests/test_hello.py</span>
+          <span class="file-card-stats">
+            <span class="fc-count" style="color:var(--green);">67 passed</span>
+            
+            <span class="fc-count" style="color:var(--text-dim);">67 tests</span>
+            <span class="fc-count" style="color:var(--text-dim);">0 ms</span>
+          </span>
+          <span class="file-card-toggle" id="detail-Python-0-arrow">▼</span>
+        </div>
+        <div class="file-card-detail" id="detail-Python-0">
+          <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th>Test</th><th>Result</th><th class="num">Duration</th>
+            </tr></thead>
+            <tbody><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_world_special_case</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_regular_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_lowercase_world_is_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_uppercase_world_is_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_empty_string</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_numeric_string</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_special_characters</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_whitespace_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_name_with_spaces</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_single_char</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_unicode_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_return_type_is_str</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_world_result_contains_world</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_non_world_result_contains_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_greeting_starts_with_hello</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHello::test_greeting_ends_with_exclamation</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_zero_times_returns_empty</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_negative_times_returns_empty</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_one_time</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_three_times</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_length_matches_times</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_world_special_case_repeated</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_returns_list</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_all_items_are_strings</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestSayHelloTimes::test_minus_one_returns_empty</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_empty_list_returns_empty</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_single_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_multiple_names</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_world_in_list_gets_special_greeting</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_length_matches_input</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_order_preserved</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_returns_list</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_empty_string_in_list</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestGreetAll::test_duplicate_names</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_empty_name_returns_stranger</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_name_only</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_name_with_title</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_name_with_mr_title</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_no_title_no_dot_prefix</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_result_ends_with_period</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_stranger_result_ends_with_exclamation</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_title_appears_before_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestFormalGreeting::test_empty_title_ignored</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestShoutHello::test_empty_name_returns_hello_shout</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestShoutHello::test_regular_name_uppercased</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestShoutHello::test_world_uppercased</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestShoutHello::test_result_is_all_uppercase</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestShoutHello::test_lowercase_name_uppercased</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestShoutHello::test_return_type_is_str</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_empty_list_returns_zero</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_all_valid_names</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_empty_strings_not_counted</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_all_empty_strings</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_single_valid_name</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_single_empty_string</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_returns_int</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_world_counted</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestCountHellos::test_mixed_valid_and_empty</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_world_is_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_regular_name_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_empty_string_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_lowercase_world_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_uppercase_world_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_world_with_space_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_returns_bool</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestIsSpecialName::test_numeric_not_special</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">test_kill_survivor_line_15</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr></tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+      <div class="file-card">
+        <div class="file-card-header" onclick="toggleDetail('detail-Python-1')">
+          <span class="file-card-icon">✅</span>
+          <span class="file-card-name mono">tests/test_sample_mutation.py</span>
+          <span class="file-card-stats">
+            <span class="fc-count" style="color:var(--green);">49 passed</span>
+            
+            <span class="fc-count" style="color:var(--text-dim);">49 tests</span>
+            <span class="fc-count" style="color:var(--text-dim);">0 ms</span>
+          </span>
+          <span class="file-card-toggle" id="detail-Python-1-arrow">▼</span>
+        </div>
+        <div class="file-card-detail" id="detail-Python-1">
+          <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th>Test</th><th>Result</th><th class="num">Duration</th>
+            </tr></thead>
+            <tbody><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_add_path_basic</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_add_path_negative_numbers</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_add_path_zero</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_add_path_large_numbers</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_basic</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_negative_a</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_negative_b</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_both_negative</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_zero_first</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_zero_second</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_substitute_path_flag_false</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_add_path_flag_true_positive_a</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_add_path_flag_true_zero_a</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestArithmeticSubstitution::test_subtract_path_flag_true_negative_a</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_low_boundary_at_9</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_low_boundary_below_9</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_low_boundary_negative</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_mid_boundary_at_10</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_mid_boundary_at_20</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_mid_boundary_middle</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_high_boundary_at_21</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_high_boundary_above_21</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestRelationalBoundary::test_boundary_detection_kills_mutations</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_true_true_both_true_and_not_false</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_true_false_both_true_and_not_true</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_false_true_false_and_not_false</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_false_false_false_and_not_true</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_only_true_false_combination_returns_true</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_detect_and_to_or_mutation</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestBooleanInversion::test_detect_not_removal_mutation</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_positive_count_returns_one</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_zero_count_returns_zero</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_negative_count_returns_zero</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_boundary_at_one</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_large_positive_count</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_detect_return_1_to_0_mutation</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_detect_return_0_to_1_mutation</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestReturnValueStripping::test_detect_greater_than_to_greater_equal</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">TestIntegration::test_all_functions_callable</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">TestIntegration::test_return_types</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">test_kill_arithmetic_add_to_subtract</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">test_kill_arithmetic_subtract_to_add</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">test_kill_boundary_less_to_less_equal</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">test_kill_boundary_less_equal_to_less</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">test_kill_boundary_greater_to_greater_equal</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">test_kill_boolean_and_to_or</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">test_kill_boolean_not_removal</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="">
+          <td class="mono" style="padding-left:8px;">test_kill_return_value_1_to_0</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr><tr class="even">
+          <td class="mono" style="padding-left:8px;">test_kill_return_value_0_to_1</td>
+          <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">PASSED</span></td>
+          <td class="num">0 ms</td>
+        </tr></tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  
+  <!-- ═══ MUTATION ANALYTICS ════════════════════════════════ -->
+  <section>
+    <div class="section-header">
+      <span class="section-icon">🧬</span>
+      <div>
+        <div class="section-title">Mutation Testing Analytics</div>
+        <div class="section-sub">48 mutants generated &middot; 48 executed</div>
+      </div>
+    </div>
+
+    <!-- score gauge -->
+    <div class="score-band">
+      <div class="score-gauge">
+        <div class="score-value" style="color:#4caf50;">100.0%</div>
+        <div class="score-label">Mutation Score</div>
+        <div style="background:#37474f;border-radius:4px;height:8px;width:100%;margin-top:6px;"><div style="background:#4caf50;border-radius:4px;height:8px;width:100.0%;"></div></div>
+      </div>
+      <div class="score-stats">
+        <div class="stat-item"><span class="stat-num" style="color:#ffb74d;">48</span><span class="stat-lbl">Generated</span></div>
+        <div class="stat-item"><span class="stat-num killed">48</span><span class="stat-lbl">Killed</span></div>
+        <div class="stat-item"><span class="stat-num survived">0</span><span class="stat-lbl">Survived</span></div>
+        <div class="stat-item"><span class="stat-num pending">0</span><span class="stat-lbl">Pending</span></div>
+      </div>
+    </div>
+
+    
+    <!-- severity breakdown -->
+    <h3 class="sub-heading">Severity Breakdown</h3>
+    <table>
+      <thead><tr>
+        <th>Severity</th><th class="num">Total</th><th class="num">Killed</th>
+        <th class="num">Survived</th><th class="num">Pending</th><th>Kill Rate</th>
+      </tr></thead>
+      <tbody><tr>
+        <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+        <td class="num">39</td>
+        <td class="num killed">39</td>
+        <td class="num survived">0</td>
+        <td class="num pending">0</td>
+        <td style="min-width:120px;"><div style="background:#37474f;border-radius:4px;height:8px;width:100%;margin-top:6px;"><div style="background:#43a047;border-radius:4px;height:8px;width:100.0%;"></div></div><span style="font-size:.75em;opacity:.7;">100% killed</span></td>
+      </tr><tr>
+        <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+        <td class="num">7</td>
+        <td class="num killed">7</td>
+        <td class="num survived">0</td>
+        <td class="num pending">0</td>
+        <td style="min-width:120px;"><div style="background:#37474f;border-radius:4px;height:8px;width:100%;margin-top:6px;"><div style="background:#43a047;border-radius:4px;height:8px;width:100.0%;"></div></div><span style="font-size:.75em;opacity:.7;">100% killed</span></td>
+      </tr><tr>
+        <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#43a047;color:#fff;">LOW</span></td>
+        <td class="num">2</td>
+        <td class="num killed">2</td>
+        <td class="num survived">0</td>
+        <td class="num pending">0</td>
+        <td style="min-width:120px;"><div style="background:#37474f;border-radius:4px;height:8px;width:100%;margin-top:6px;"><div style="background:#43a047;border-radius:4px;height:8px;width:100.0%;"></div></div><span style="font-size:.75em;opacity:.7;">100% killed</span></td>
+      </tr></tbody>
+    </table>
+
+    
+    <!-- per-mutant detail -->
+    <h3 class="sub-heading" style="margin-top:28px;">Mutant Details</h3>
+    <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th class="num">#</th>
+        <th>Mutant ID</th>
+        <th>File : Line</th>
+        <th>Operator</th>
+        <th>Severity</th>
+        <th>Original</th>
+        <th>Mutated</th>
+        <th>Result</th>
+        <th class="num">Time</th>
+      </tr></thead>
+      <tbody><tr class="even">
+      <td class="num dim">1</td>
+      <td class="mono dim">mut_001</td>
+      <td class="mono">hello.py<span class="line-num">:9</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">==</code></td>
+      <td><code class="mut">NotEq</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestArithmeticSubstitution::test_add_path_negative_numbers FAILED [ 55%]</div></td>
+      <td class="num">400 ms</td>
+    </tr><tr class="">
+      <td class="num dim">2</td>
+      <td class="mono dim">mut_028</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:27</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">0</code></td>
+      <td><code class="mut">1</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestReturnValueStripping::test_zero_count_returns_zero FAILED [ 79%]</div></td>
+      <td class="num">468 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">3</td>
+      <td class="mono dim">mut_020</td>
+      <td class="mono">hello.py<span class="line-num">:51</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">==</code></td>
+      <td><code class="mut">NotEq</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_false_both_true_and_not_true FAILED [ 73%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="">
+      <td class="num dim">4</td>
+      <td class="mono dim">mut_004</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:6</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHelloTimes::test_one_time FAILED      [ 15%]</div></td>
+      <td class="num">426 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">5</td>
+      <td class="mono dim">mut_005</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:6</span></td>
+      <td><code class="op-type">arithmetic_substitution</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#43a047;color:#fff;">LOW</span></td>
+      <td><code class="orig">+</code></td>
+      <td><code class="mut">sub</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHelloTimes::test_one_time FAILED      [ 15%]</div></td>
+      <td class="num">407 ms</td>
+    </tr><tr class="">
+      <td class="num dim">6</td>
+      <td class="mono dim">mut_010</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:12</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestGreetAll::test_single_name FAILED        [ 21%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">7</td>
+      <td class="mono dim">mut_014</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:15</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestFormalGreeting::test_name_only FAILED    [ 28%]</div></td>
+      <td class="num">389 ms</td>
+    </tr><tr class="">
+      <td class="num dim">8</td>
+      <td class="mono dim">mut_007</td>
+      <td class="mono">hello.py<span class="line-num">:18</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestArithmeticSubstitution::test_add_path_negative_numbers FAILED [ 55%]</div></td>
+      <td class="num">420 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">9</td>
+      <td class="mono dim">mut_021</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:21</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_true_both_true_and_not_false FAILED [ 72%]</div></td>
+      <td class="num">430 ms</td>
+    </tr><tr class="">
+      <td class="num dim">10</td>
+      <td class="mono dim">mut_022</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:21</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">False</code></td>
+      <td><code class="mut">True</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_true_both_true_and_not_false FAILED [ 72%]</div></td>
+      <td class="num">414 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">11</td>
+      <td class="mono dim">mut_009</td>
+      <td class="mono">hello.py<span class="line-num">:24</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestRelationalBoundary::test_mid_boundary_at_10 FAILED [ 68%]</div></td>
+      <td class="num">398 ms</td>
+    </tr><tr class="">
+      <td class="num dim">12</td>
+      <td class="mono dim">mut_027</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:27</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestReturnValueStripping::test_zero_count_returns_zero FAILED [ 79%]</div></td>
+      <td class="num">414 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">13</td>
+      <td class="mono dim">mut_011</td>
+      <td class="mono">hello.py<span class="line-num">:30</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">not</code></td>
+      <td><code class="mut">RemoveNot</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestRelationalBoundary::test_mid_boundary_at_10 FAILED [ 68%]</div></td>
+      <td class="num">404 ms</td>
+    </tr><tr class="">
+      <td class="num dim">14</td>
+      <td class="mono dim">mut_013</td>
+      <td class="mono">hello.py<span class="line-num">:33</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestRelationalBoundary::test_mid_boundary_at_10 FAILED [ 68%]</div></td>
+      <td class="num">406 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">15</td>
+      <td class="mono dim">mut_015</td>
+      <td class="mono">hello.py<span class="line-num">:39</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">not</code></td>
+      <td><code class="mut">RemoveNot</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_false_both_true_and_not_true FAILED [ 73%]</div></td>
+      <td class="num">400 ms</td>
+    </tr><tr class="">
+      <td class="num dim">16</td>
+      <td class="mono dim">mut_019</td>
+      <td class="mono">hello.py<span class="line-num">:51</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_false_both_true_and_not_true FAILED [ 73%]</div></td>
+      <td class="num">404 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">17</td>
+      <td class="mono dim">mut_002</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:5</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">&gt;=</code></td>
+      <td><code class="mut">Lt</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHello::test_world_special_case FAILED [  0%]</div></td>
+      <td class="num">417 ms</td>
+    </tr><tr class="">
+      <td class="num dim">18</td>
+      <td class="mono dim">mut_003</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:5</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">0</code></td>
+      <td><code class="mut">1</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHello::test_regular_name FAILED       [  1%]</div></td>
+      <td class="num">492 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">19</td>
+      <td class="mono dim">mut_008</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:11</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">&lt;</code></td>
+      <td><code class="mut">GtE</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestGreetAll::test_single_name FAILED        [ 21%]</div></td>
+      <td class="num">412 ms</td>
+    </tr><tr class="">
+      <td class="num dim">20</td>
+      <td class="mono dim">mut_009</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:11</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">10</code></td>
+      <td><code class="mut">11</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestRelationalBoundary::test_mid_boundary_at_10 FAILED [ 68%]</div></td>
+      <td class="num">398 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">21</td>
+      <td class="mono dim">mut_011</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:13</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">&lt;=</code></td>
+      <td><code class="mut">Gt</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestRelationalBoundary::test_mid_boundary_at_10 FAILED [ 68%]</div></td>
+      <td class="num">404 ms</td>
+    </tr><tr class="">
+      <td class="num dim">22</td>
+      <td class="mono dim">mut_012</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:13</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">20</code></td>
+      <td><code class="mut">21</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestFormalGreeting::test_empty_name_returns_stranger FAILED [ 28%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">23</td>
+      <td class="mono dim">mut_004</td>
+      <td class="mono">hello.py<span class="line-num">:16</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">&lt;=</code></td>
+      <td><code class="mut">Gt</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHelloTimes::test_one_time FAILED      [ 15%]</div></td>
+      <td class="num">426 ms</td>
+    </tr><tr class="">
+      <td class="num dim">24</td>
+      <td class="mono dim">mut_005</td>
+      <td class="mono">hello.py<span class="line-num">:16</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">0</code></td>
+      <td><code class="mut">1</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHelloTimes::test_one_time FAILED      [ 15%]</div></td>
+      <td class="num">407 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">25</td>
+      <td class="mono dim">mut_023</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:25</span></td>
+      <td><code class="op-type">relational_operator_replacement</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">&gt;</code></td>
+      <td><code class="mut">LtE</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestReturnValueStripping::test_positive_count_returns_one FAILED [ 78%]</div></td>
+      <td class="num">400 ms</td>
+    </tr><tr class="">
+      <td class="num dim">26</td>
+      <td class="mono dim">mut_024</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:25</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">0</code></td>
+      <td><code class="mut">1</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestReturnValueStripping::test_positive_count_returns_one FAILED [ 78%]</div></td>
+      <td class="num">412 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">27</td>
+      <td class="mono dim">mut_026</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:26</span></td>
+      <td><code class="op-type">boundary_value_tweak</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#fb8c00;color:#fff;">MEDIUM</span></td>
+      <td><code class="orig">1</code></td>
+      <td><code class="mut">2</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestReturnValueStripping::test_positive_count_returns_one FAILED [ 78%]</div></td>
+      <td class="num">401 ms</td>
+    </tr><tr class="">
+      <td class="num dim">28</td>
+      <td class="mono dim">mut_001</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:5</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">and</code></td>
+      <td><code class="mut">Or</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestArithmeticSubstitution::test_add_path_negative_numbers FAILED [ 55%]</div></td>
+      <td class="num">400 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">29</td>
+      <td class="mono dim">mut_006</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:7</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHelloTimes::test_zero_times_returns_empty FAILED [ 13%]</div></td>
+      <td class="num">407 ms</td>
+    </tr><tr class="">
+      <td class="num dim">30</td>
+      <td class="mono dim">mut_007</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:7</span></td>
+      <td><code class="op-type">arithmetic_substitution</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#43a047;color:#fff;">LOW</span></td>
+      <td><code class="orig">-</code></td>
+      <td><code class="mut">add</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestArithmeticSubstitution::test_add_path_negative_numbers FAILED [ 55%]</div></td>
+      <td class="num">420 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">31</td>
+      <td class="mono dim">mut_002</td>
+      <td class="mono">hello.py<span class="line-num">:10</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHello::test_world_special_case FAILED [  0%]</div></td>
+      <td class="num">417 ms</td>
+    </tr><tr class="">
+      <td class="num dim">32</td>
+      <td class="mono dim">mut_003</td>
+      <td class="mono">hello.py<span class="line-num">:11</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHello::test_regular_name FAILED       [  1%]</div></td>
+      <td class="num">492 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">33</td>
+      <td class="mono dim">mut_013</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:14</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestRelationalBoundary::test_mid_boundary_at_10 FAILED [ 68%]</div></td>
+      <td class="num">406 ms</td>
+    </tr><tr class="">
+      <td class="num dim">34</td>
+      <td class="mono dim">mut_006</td>
+      <td class="mono">hello.py<span class="line-num">:17</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestSayHelloTimes::test_zero_times_returns_empty FAILED [ 13%]</div></td>
+      <td class="num">407 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">35</td>
+      <td class="mono dim">mut_015</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:19</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">or</code></td>
+      <td><code class="mut">And</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_false_both_true_and_not_true FAILED [ 73%]</div></td>
+      <td class="num">400 ms</td>
+    </tr><tr class="">
+      <td class="num dim">36</td>
+      <td class="mono dim">mut_016</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:19</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">and</code></td>
+      <td><code class="mut">Or</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestShoutHello::test_empty_name_returns_hello_shout FAILED [ 35%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">37</td>
+      <td class="mono dim">mut_017</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:19</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">not</code></td>
+      <td><code class="mut">RemoveNot</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestShoutHello::test_regular_name_uppercased FAILED [ 36%]</div></td>
+      <td class="num">399 ms</td>
+    </tr><tr class="">
+      <td class="num dim">38</td>
+      <td class="mono dim">mut_018</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:19</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">False</code></td>
+      <td><code class="mut">True</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestCountHellos::test_empty_list_returns_zero FAILED [ 40%]</div></td>
+      <td class="num">430 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">39</td>
+      <td class="mono dim">mut_019</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:20</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_false_both_true_and_not_true FAILED [ 73%]</div></td>
+      <td class="num">404 ms</td>
+    </tr><tr class="">
+      <td class="num dim">40</td>
+      <td class="mono dim">mut_020</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:20</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">True</code></td>
+      <td><code class="mut">False</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestBooleanInversion::test_true_false_both_true_and_not_true FAILED [ 73%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">41</td>
+      <td class="mono dim">mut_008</td>
+      <td class="mono">hello.py<span class="line-num">:23</span></td>
+      <td><code class="op-type">boolean_inversion</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">not</code></td>
+      <td><code class="mut">RemoveNot</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestGreetAll::test_single_name FAILED        [ 21%]</div></td>
+      <td class="num">412 ms</td>
+    </tr><tr class="">
+      <td class="num dim">42</td>
+      <td class="mono dim">mut_010</td>
+      <td class="mono">hello.py<span class="line-num">:25</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestGreetAll::test_single_name FAILED        [ 21%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">43</td>
+      <td class="mono dim">mut_025</td>
+      <td class="mono">sample_mutation.py<span class="line-num">:26</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_sample_mutation.py::TestReturnValueStripping::test_positive_count_returns_one FAILED [ 78%]</div></td>
+      <td class="num">401 ms</td>
+    </tr><tr class="">
+      <td class="num dim">44</td>
+      <td class="mono dim">mut_012</td>
+      <td class="mono">hello.py<span class="line-num">:31</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestFormalGreeting::test_empty_name_returns_stranger FAILED [ 28%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">45</td>
+      <td class="mono dim">mut_014</td>
+      <td class="mono">hello.py<span class="line-num">:34</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestFormalGreeting::test_name_only FAILED    [ 28%]</div></td>
+      <td class="num">389 ms</td>
+    </tr><tr class="">
+      <td class="num dim">46</td>
+      <td class="mono dim">mut_016</td>
+      <td class="mono">hello.py<span class="line-num">:40</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestShoutHello::test_empty_name_returns_hello_shout FAILED [ 35%]</div></td>
+      <td class="num">405 ms</td>
+    </tr><tr class="even">
+      <td class="num dim">47</td>
+      <td class="mono dim">mut_017</td>
+      <td class="mono">hello.py<span class="line-num">:41</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestShoutHello::test_regular_name_uppercased FAILED [ 36%]</div></td>
+      <td class="num">399 ms</td>
+    </tr><tr class="">
+      <td class="num dim">48</td>
+      <td class="mono dim">mut_018</td>
+      <td class="mono">hello.py<span class="line-num">:46</span></td>
+      <td><code class="op-type">return_value_stripping</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#e53935;color:#fff;">HIGH</span></td>
+      <td><code class="orig">return</code></td>
+      <td><code class="mut">StripReturnValue</code></td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:.78em;font-weight:700;background:#1b5e20;color:#a5d6a7;">KILLED</span><div class="killing-test">py-src/tests/test_hello.py::TestCountHellos::test_empty_list_returns_zero FAILED [ 40%]</div></td>
+      <td class="num">430 ms</td>
+    </tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  </main>
+
+  <footer>
+    AI Mutation Testing Extension &nbsp;&middot;&nbsp; Report generated 7/20/2026, 9:05:35 PM
+  </footer>
+</body>
+</html>

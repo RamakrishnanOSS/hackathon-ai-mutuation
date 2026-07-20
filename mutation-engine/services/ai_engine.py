@@ -5,6 +5,7 @@ Orchestrates mutation prioritization and automated test-generation to kill remai
 """
 
 import os
+import re
 import json
 from typing import Dict, Any, List, Optional
 try:
@@ -48,12 +49,74 @@ class AIEngine:
         else:
             self.client = None
 
-    def prioritize_mutants(self, mutants: List[Dict[str, Any]], strategy: str = "complexity") -> List[Dict[str, Any]]:
+    def _tokenize_context(self, text: str) -> List[str]:
+        """Normalize developer instructions into lowercase keyword tokens."""
+        if not text:
+            return []
+        return [t for t in re.split(r"[^a-z0-9_]+", text.lower()) if len(t) >= 3]
+
+    def _context_boost_for_mutant(
+        self,
+        mutant: Dict[str, Any],
+        tokens: List[str],
+        focus_area: str,
+        test_strategy: str,
+    ) -> float:
+        """Heuristic boost so developer guidance impacts final ranking."""
+        boost = 0.0
+        operator_type = str(mutant.get("operator_type", "")).lower()
+        explanation = str(mutant.get("explanation", "")).lower()
+        original_code = str(mutant.get("original_code", "")).lower()
+        mutated_value = str(mutant.get("mutated_value", "")).lower()
+        searchable = f"{operator_type} {explanation} {original_code} {mutated_value}"
+
+        if focus_area == "edge cases":
+            if operator_type in {"boundary_value_tweak", "relational_operator_replacement"}:
+                boost += 0.6
+        elif focus_area == "logic":
+            if operator_type in {"boolean_inversion", "relational_operator_replacement"}:
+                boost += 0.6
+        elif focus_area == "return values":
+            if operator_type == "return_value_stripping":
+                boost += 0.8
+        elif focus_area == "performance":
+            if operator_type in {"arithmetic_substitution", "boundary_value_tweak"}:
+                boost += 0.4
+
+        if test_strategy == "branch coverage":
+            if operator_type in {"boolean_inversion", "relational_operator_replacement"}:
+                boost += 0.4
+        elif test_strategy == "path coverage":
+            if operator_type in {"boolean_inversion", "relational_operator_replacement", "boundary_value_tweak"}:
+                boost += 0.4
+        elif test_strategy == "statement coverage":
+            boost += 0.1
+        elif test_strategy == "comprehensive":
+            boost += 0.2
+
+        if tokens:
+            matches = sum(1 for token in tokens if token in searchable)
+            boost += min(matches * 0.25, 1.25)
+
+        return boost
+
+    def prioritize_mutants(
+        self,
+        mutants: List[Dict[str, Any]],
+        strategy: str = "complexity",
+        developer_instructions: str = "",
+        focus_area: str = "",
+        test_strategy: str = "",
+    ) -> List[Dict[str, Any]]:
         """
         Intelligently prioritize or select mutations.
         Returns mutants list sorted with an assigned 'priority' field ('HIGH', 'MEDIUM', 'LOW').
         """
         prioritized = []
+        normalized_focus = (focus_area or "").strip().lower()
+        normalized_strategy = (test_strategy or strategy or "").strip().lower()
+        context_tokens = self._tokenize_context(developer_instructions)
+
         for index, mutant in enumerate(mutants):
             item = mutant.copy()
             
@@ -72,11 +135,33 @@ class AIEngine:
                 item["priority"] = "LOW"
                 item["complexity_score"] = 0.8
 
+            context_boost = self._context_boost_for_mutant(
+                item,
+                context_tokens,
+                normalized_focus,
+                normalized_strategy,
+            )
+            total_score = float(item["complexity_score"]) + context_boost
+            item["context_boost"] = round(context_boost, 3)
+            item["priority_score"] = round(total_score, 3)
+
+            if total_score >= 2.4:
+                item["priority"] = "HIGH"
+            elif total_score >= 1.5 and item["priority"] == "LOW":
+                item["priority"] = "MEDIUM"
+
             prioritized.append(item)
 
         # Sort: HIGH comes first, then MEDIUM, then LOW
         priority_weights = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
-        prioritized.sort(key=lambda x: priority_weights.get(x["priority"], 0), reverse=True)
+        prioritized.sort(
+            key=lambda x: (
+                priority_weights.get(x["priority"], 0),
+                x.get("priority_score", x.get("complexity_score", 0.0)),
+                -int(x.get("line_number", 0)),
+            ),
+            reverse=True,
+        )
         return prioritized
 
     def generate_test_to_kill_survivor(

@@ -406,7 +406,13 @@ def generate_mutations(projectId: str, payload: MutationGenerateRequest):
         # Detect language from discovered files or provided targets
         language = detect_language_from_targets(project_path, target_files)
         ai_engine = build_ai_engine(language, payload.aiEngineProvider, payload.aiApiKey)
-        prioritized_list = ai_engine.prioritize_mutants(all_mutants)
+        prioritized_list = ai_engine.prioritize_mutants(
+            all_mutants,
+            strategy=payload.testStrategy or "complexity",
+            developer_instructions=payload.developerInstructions or "",
+            focus_area=payload.focusArea or "",
+            test_strategy=payload.testStrategy or "",
+        )
 
         # Cache mutant schemas to server database register
         for m in prioritized_list:
