@@ -10,6 +10,7 @@ on:
     branches:
       - main
       - develop
+      - check_workflow
       - feature/**
   pull_request:
     branches:
@@ -131,11 +132,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          cd project-sources/py-src && pip install -e . && cd - || true
+          pip install pytest pytest-cov pytest-html junit2html
       - name: Run Python tests (pytest + unittest framework support)
         id: metrics
         shell: bash
-        run: bash project-sources/scripts/test-python.sh
+        run: |
+          export PYTHONPATH="$PWD/project-sources/py-src/src:${PYTHONPATH:-}"
+          bash project-sources/scripts/test-python.sh
       - name: Upload pytest artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -282,13 +285,8 @@ jobs:
           cache: pip
 
       # Write setup.cfg BEFORE pip installs mutmut.
-      # mutmut reads setup.cfg at import time — must exist before first binary call.
-      #
-      # We do NOT set "runner" — providing a custom runner caused pytest exit code 5
-      # ("no tests collected") on every mutant because the path was unresolvable.
-      # mutmut builds its own correct pytest command from tests_dir.
-      #
-      # Heredoc MUST start at column 0. Leading spaces make INI keys unrecognised.
+      # mutmut reads setup.cfg from the current project root, so the job resolves the
+      # Python package folder first and runs every mutmut command from that folder.
       - name: Determine scope and write setup.cfg [mutmut]
         id: scope
         shell: bash
@@ -297,63 +295,77 @@ jobs:
           echo "scope=$SCOPE" >> "$GITHUB_OUTPUT"
           echo "Mutation scope: $SCOPE"
 
-          # Comma-separated dirs containing non-test source .py files
-          SRC_PATHS=$(find "$SCOPE" -type f -name '*.py' \
-            ! -name 'test_*.py' ! -name '*_test.py' 2>/dev/null \
-            | xargs -I{} dirname {} 2>/dev/null | sort -u \
-            | tr '\n' ',' | sed 's/,$//')
-
-          # Comma-separated dirs containing test files
-          TEST_DIRS=$(find "$SCOPE" -type f \( -name 'test_*.py' -o -name '*_test.py' \) \
-            2>/dev/null | xargs -I{} dirname {} 2>/dev/null | sort -u \
-            | tr '\n' ',' | sed 's/,$//')
-
-          [ -z "$SRC_PATHS" ] && SRC_PATHS="$SCOPE"
-          [ -z "$TEST_DIRS"  ] && TEST_DIRS="$SCOPE"
-
-          echo "paths_to_mutate : $SRC_PATHS"
-          echo "tests_dir   : $TEST_DIRS"
-
-          # Strip any existing [mutmut] block
-          if [ -f setup.cfg ]; then
-            python3 -c "
-          import re, pathlib
-          text = pathlib.Path('setup.cfg').read_text(errors='ignore')
-          text = re.sub(r'\[mutmut\].*?(?=\n\[|\Z)', '', text, flags=re.DOTALL)
-          pathlib.Path('setup.cfg').write_text(text.rstrip() + '\n')"
+          PYTHON_ROOT=""
+          if [ -f "$SCOPE/pyproject.toml" ] && [ -d "$SCOPE/src" ] && [ -d "$SCOPE/tests" ]; then
+            PYTHON_ROOT="$SCOPE"
+          else
+            PYTHON_ROOT=$(find "$SCOPE" -type f -name pyproject.toml 2>/dev/null \
+              | while read -r project_file; do
+                  candidate=$(dirname "$project_file")
+                  if [ -d "$candidate/src" ] && [ -d "$candidate/tests" ]; then
+                    echo "$candidate"
+                    break
+                  fi
+                done)
           fi
 
-          # Keys must be flush-left — do NOT indent this heredoc
-          cat >> setup.cfg << CFG
+          if [ -z "$PYTHON_ROOT" ] && [ -d "project-sources/py-src/src" ] && [ -d "project-sources/py-src/tests" ]; then
+            PYTHON_ROOT="project-sources/py-src"
+          fi
+
+          if [ -z "$PYTHON_ROOT" ]; then
+            echo "::warning::No Python package root with src/ and tests/ found under $SCOPE"
+            PYTHON_ROOT="$SCOPE"
+          fi
+
+          echo "python_root=$PYTHON_ROOT" >> "$GITHUB_OUTPUT"
+          echo "Python project root: $PYTHON_ROOT"
+          echo "paths_to_mutate: src"
+          echo "tests_dir: tests"
+
+          # Strip any existing [mutmut] block from the Python project config.
+          if [ -f "$PYTHON_ROOT/setup.cfg" ]; then
+            python3 -c "
+          import re, pathlib
+          path = pathlib.Path('$PYTHON_ROOT/setup.cfg')
+          text = path.read_text(errors='ignore')
+          text = re.sub(r'\[mutmut\].*?(?=\n\[|\Z)', '', text, flags=re.DOTALL)
+          path.write_text(text.rstrip() + '\n')"
+          else
+            touch "$PYTHON_ROOT/setup.cfg"
+          fi
+
+          cat >> "$PYTHON_ROOT/setup.cfg" << CFG
 
           [mutmut]
-          paths_to_mutate = ${SRC_PATHS}
-          tests_dir = ${TEST_DIRS}
-          tests_dirs = ${TEST_DIRS}
+          paths_to_mutate = src
+          tests_dir = tests
+          tests_dirs = tests
           max_stack_depth = 8
-          mutate_only_covered_lines = true
           timeout_multiplier = 8.0
           CFG
 
           echo "=== setup.cfg [mutmut] ==="
-          grep -A5 '^\[mutmut\]' setup.cfg || true
+          grep -A8 '^\[mutmut\]' "$PYTHON_ROOT/setup.cfg" || true
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install "mutmut==2.4.4" pytest pytest-cov
+          pip install "mutmut==2.4.4" pytest pytest-cov pytest-timeout pytest-xdist
 
       - name: Clear mutmut cache
-        run: rm -f .mutmut-cache
+        run: rm -f "${{ steps.scope.outputs.python_root }}/.mutmut-cache"
 
       - name: Build pytest coverage map for mutmut
         shell: bash
         run: |
           set +e
-          SCOPE="${{ steps.scope.outputs.scope }}"
+          PYTHON_ROOT="${{ steps.scope.outputs.python_root }}"
           # Coverage map lets mutmut skip uncovered lines and speed up mutant runs.
-          python -m pytest "$SCOPE" -q --maxfail=1 --disable-warnings \
-            --cov="$SCOPE" --cov-branch --cov-report=term-missing:skip-covered
+          cd "$PYTHON_ROOT"
+          export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+          python -m pytest tests -q --maxfail=1 --disable-warnings \
+            --cov=src --cov-branch --cov-report=term-missing:skip-covered
           PYTEST_EXIT=$?
           if [ "$PYTEST_EXIT" -ne 0 ]; then
             echo "Coverage warmup pytest exited with code $PYTEST_EXIT; continuing with mutmut."
@@ -365,9 +377,11 @@ jobs:
         shell: bash
         run: |
           SCOPE="${{ steps.scope.outputs.scope }}"
+          PYTHON_ROOT="${{ steps.scope.outputs.python_root }}"
           echo "=== mutmut version ===" && pip show mutmut | grep -E "^(Name|Version)"
           echo "=== setup.cfg [mutmut] ==="
-          grep -A10 '^\[mutmut\]' setup.cfg || echo "NOT FOUND"
+          grep -A10 '^\[mutmut\]' "$PYTHON_ROOT/setup.cfg" || echo "NOT FOUND"
+          echo "=== Python project root ===" && echo "$PYTHON_ROOT"
           echo "=== Source files ===" && find "$SCOPE" -type f -name '*.py' ! -name 'test_*.py' ! -name '*_test.py' | sort
           echo "=== Test files ===" && find "$SCOPE" -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort
 
@@ -376,17 +390,21 @@ jobs:
         run: |
           set +e
           mkdir -p reports/mutants
-          SCOPE="${{ steps.scope.outputs.scope }}"
-          SRC_FILES=$(find "$SCOPE" -type f -name '*.py' \
+          REPO_ROOT="$PWD"
+          PYTHON_ROOT="${{ steps.scope.outputs.python_root }}"
+          SRC_FILES=$(find "$PYTHON_ROOT/src" -type f -name '*.py' \
             ! -name 'test_*.py' ! -name '*_test.py' 2>/dev/null | sort)
           if [ -z "$SRC_FILES" ]; then
-            echo "No Python source files to mutate in $SCOPE"
+            echo "No Python source files to mutate in $PYTHON_ROOT/src"
             printf "killed=0\nsurvived=0\ntimeout=0\n" > reports/mutmut-counts.txt
             exit 0
           fi
-          mutmut run 2>&1 | tee reports/mutmut-run.log
-          mutmut results 2>/dev/null | tee reports/mutmut-results.log || true
-          mutmut junitxml > reports/mutmut-results.xml 2>/dev/null || true
+          cd "$PYTHON_ROOT"
+          export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+          mutmut run 2>&1 | tee "$REPO_ROOT/reports/mutmut-run.log"
+          echo "mutmut exit: ${PIPESTATUS[0]}" | tee -a "$REPO_ROOT/reports/mutmut-run.log"
+          mutmut results 2>/dev/null | tee "$REPO_ROOT/reports/mutmut-results.log" || true
+          mutmut junitxml > "$REPO_ROOT/reports/mutmut-results.xml" 2>/dev/null || true
 
           # Layer 1: result-ids subcommand
           count_result_ids () {
@@ -399,28 +417,28 @@ jobs:
           TIMEOUT=$(count_result_ids timeout)
           # Layer 2: summary line
           if [ "${KILLED:-0}" -eq 0 ] && [ "${SURVIVED:-0}" -eq 0 ]; then
-            _K=$(grep -oP '\d+(?=\s+killed)'       reports/mutmut-run.log 2>/dev/null | tail -1)
-            _S=$(grep -oP '\d+(?=\s+survived)'     reports/mutmut-run.log 2>/dev/null | tail -1)
-            _T=$(grep -oP '\d+(?=\s+timed?\s*out)' reports/mutmut-run.log 2>/dev/null | tail -1)
+            _K=$(grep -oP '\d+(?=\s+killed)'       "$REPO_ROOT/reports/mutmut-run.log" 2>/dev/null | tail -1)
+            _S=$(grep -oP '\d+(?=\s+survived)'     "$REPO_ROOT/reports/mutmut-run.log" 2>/dev/null | tail -1)
+            _T=$(grep -oP '\d+(?=\s+timed?\s*out)' "$REPO_ROOT/reports/mutmut-run.log" 2>/dev/null | tail -1)
             [ -n "$_K" ] && KILLED=$_K; [ -n "$_S" ] && SURVIVED=$_S; [ -n "$_T" ] && TIMEOUT=$_T
           fi
           # Layer 3: emoji spinner
           if [ "${KILLED:-0}" -eq 0 ] && [ "${SURVIVED:-0}" -eq 0 ]; then
-            _K=$(grep -oP '🎉\s*\K\d+' reports/mutmut-run.log 2>/dev/null | tail -1)
-            _S=$(grep -oP '🙁\s*\K\d+' reports/mutmut-run.log 2>/dev/null | tail -1)
-            _T=$(grep -oP '⏰\s*\K\d+'  reports/mutmut-run.log 2>/dev/null | tail -1)
+            _K=$(grep -oP '🎉\s*\K\d+' "$REPO_ROOT/reports/mutmut-run.log" 2>/dev/null | tail -1)
+            _S=$(grep -oP '🙁\s*\K\d+' "$REPO_ROOT/reports/mutmut-run.log" 2>/dev/null | tail -1)
+            _T=$(grep -oP '⏰\s*\K\d+'  "$REPO_ROOT/reports/mutmut-run.log" 2>/dev/null | tail -1)
             [ -n "$_K" ] && KILLED=$_K; [ -n "$_S" ] && SURVIVED=$_S; [ -n "$_T" ] && TIMEOUT=$_T
           fi
 
           KILLED=${KILLED:-0}; SURVIVED=${SURVIVED:-0}; TIMEOUT=${TIMEOUT:-0}
-          printf "killed=%s\nsurvived=%s\ntimeout=%s\n" "$KILLED" "$SURVIVED" "$TIMEOUT" > reports/mutmut-counts.txt
+          printf "killed=%s\nsurvived=%s\ntimeout=%s\n" "$KILLED" "$SURVIVED" "$TIMEOUT" > "$REPO_ROOT/reports/mutmut-counts.txt"
           echo "Summary: killed=$KILLED survived=$SURVIVED timeout=$TIMEOUT"
 
           # Save diffs for survived mutants
           SURVIVED_IDS=$(mutmut result-ids survived 2>/dev/null || true)
           for ID in $SURVIVED_IDS; do
             [ -z "$ID" ] && continue
-            mutmut show "$ID" > "reports/mutants/mutant-${ID}.diff" 2>/dev/null || true
+            mutmut show "$ID" > "$REPO_ROOT/reports/mutants/mutant-${ID}.diff" 2>/dev/null || true
           done
           set -e
 
