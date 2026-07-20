@@ -145,6 +145,11 @@ class MutationGenerateRequest(BaseModel):
     ]
     aiEngineProvider: Optional[str] = None
     aiApiKey: Optional[str] = None
+    # ── Developer context (captured from VS Code extension) ──
+    # Guides the AI engine to generate more focused, relevant mutations
+    developerInstructions: Optional[str] = None
+    focusArea: Optional[str] = None  # e.g., "edge_cases", "performance", "boundary_conditions"
+    testStrategy: Optional[str] = None  # e.g., "branch_coverage", "statement_coverage", "path_coverage"
 
 
 class TestRunExecuteRequest(BaseModel):

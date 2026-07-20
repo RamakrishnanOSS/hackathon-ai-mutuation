@@ -2,17 +2,18 @@
 # AI Mutation Testing — Dev Container Compose (agent workspace)
 #
 # The devcontainer workspace is agent/ — the source directory consumed by
-# the mutation engine. Core services (core-service, prometheus, grafana)
-# are managed by the root-level docker-compose.yml.
+# the mutation engine. The core-service is built from Dockerfile.core.
 #
-# The devcontainer joins "mutation-net" (created by the root compose) so it
-# can reach core-service, prometheus, and grafana by service name.
-# Run the infra stack first:
-#   docker compose up -d   (from the project root)
+# Services:
+#   - devcontainer:   VS Code dev environment (Python 3.11, Node 20, build-essential)
+#   - core-service:   FastAPI mutation service (built from Dockerfile.core)
+#
+# The devcontainer joins "mutation-net" so services can communicate by name.
+# Both services share the same network and access to API keys via environment.
 # ─────────────────────────────────────────────────────────────────────────────
 networks:
   mutation-net:
-    external: true          # created by the root docker-compose.yml
+    driver: bridge
 
 services:
 
@@ -25,8 +26,26 @@ services:
       - ..:/workspace:cached         # live-mount agent/ as /workspace
     networks:
       - mutation-net
+    depends_on:
+      - core-service
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     # keep container alive; actual processes started by devcontainer lifecycle hooks
     command: /bin/sh -c "while sleep 3600; do :; done"
+
+  # ── Core mutation service (from Dockerfile.core) ───────────
+  core-service:
+    build:
+      context: ../..                 # project root as build context
+      dockerfile: Dockerfile.core
+    ports:
+      - "8000:8000"
+    networks:
+      - mutation-net
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ..:/app:cached               # live-mount project root for hot-reload
+    command: python3 services/core_mutation_service.py

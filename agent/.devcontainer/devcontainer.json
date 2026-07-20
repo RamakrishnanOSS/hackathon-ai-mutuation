@@ -3,6 +3,11 @@
 // Opens agent/ as the VS Code workspace root.
 // Python 3.11 + Node 20 + g++ are provided by the custom Dockerfile.
 //
+// Features:
+//   - Dockerfile.core integrated as "core-service" in docker-compose.yml
+//   - Services: devcontainer (dev env) + core-service (FastAPI mutation engine)
+//   - Port forwarding: 8000 (FastAPI), 3000 (Grafana), 9090 (Prometheus)
+//
 // Extension workflow:
 //   Build (host only, run once before opening the devcontainer, from repo root):
 //     bash vscode-extension-scripts/build-extension.sh
@@ -17,6 +22,24 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "devcontainer",
   "workspaceFolder": "/workspace",
+
+  // ── Features ────────────────────────────────────────────────
+  //
+  // Dockerfile.core is integrated via docker-compose.yml as the "core-service".
+  // The devcontainer image itself (agent/.devcontainer/Dockerfile) includes:
+  //   - Python 3.11, Node 20, build-essential, g++, gcc, cmake, make
+  //   - Git, curl, jq, and pip dependencies from requirements.txt
+  //
+  // The core-service (built from root Dockerfile.core) provides:
+  //   - Python 3.11 with FastAPI for the mutation engine
+  //   - g++, gcc, cmake, make for C/C++ mutation test execution
+  //   - Accessible at http://core-service:8000
+  //
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:4.0.0": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
 
   // Companion extensions auto-installed from the marketplace.
   // The local AI Mutation Tester extension is installed via postAttachCommand.

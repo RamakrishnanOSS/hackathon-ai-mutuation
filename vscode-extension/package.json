@@ -39,6 +39,26 @@
     "menus": {
       "view/title": [
         {
+          "command": "mutation.setDeveloperInstructions",
+          "when": "view == mutation-explorer",
+          "group": "inline@0"
+        },
+        {
+          "command": "mutation.setFocusArea",
+          "when": "view == mutation-explorer",
+          "group": "inline@1"
+        },
+        {
+          "command": "mutation.setTestStrategy",
+          "when": "view == mutation-explorer",
+          "group": "inline@2"
+        },
+        {
+          "command": "mutation.clearDeveloperContext",
+          "when": "view == mutation-explorer",
+          "group": "inline@3"
+        },
+        {
           "command": "mutation.runBaseline",
           "when": "view == mutation-explorer",
           "group": "navigation@1"
@@ -215,6 +235,30 @@
         "command": "mutation.generateReport",
         "title": "Generate Mutation Report",
         "icon": "$(report)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.setDeveloperInstructions",
+        "title": "Set Developer Instructions for Mutation Generation",
+        "icon": "$(edit)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.setFocusArea",
+        "title": "Set Mutation Focus Area",
+        "icon": "$(target)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.setTestStrategy",
+        "title": "Set Test Strategy",
+        "icon": "$(checklist)",
+        "category": "Mutation Testing"
+      },
+      {
+        "command": "mutation.clearDeveloperContext",
+        "title": "Clear Developer Context",
+        "icon": "$(trash)",
         "category": "Mutation Testing"
       }
     ],

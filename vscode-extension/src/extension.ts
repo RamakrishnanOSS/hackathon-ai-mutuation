@@ -331,6 +331,78 @@ export function activate(context: vscode.ExtensionContext) {
 
   outputChannel.appendLine("AI Mutation Testing Extension is active.");
 
+  // ── Developer instructions context (captured before generating mutations) ──
+  let developerInstructions: string = "";
+  let focusArea: string = "";
+  let testStrategy: string = "";
+
+  // ══════════════════════════════════════════════════════════════
+  // Command 0: Capture Developer Instructions for Mutation Generation
+  // ══════════════════════════════════════════════════════════════
+  let setDeveloperInstructions = vscode.commands.registerCommand('mutation.setDeveloperInstructions', async () => {
+    const instructions = await vscode.window.showInputBox({
+      placeHolder: "e.g., Focus on boundary conditions, edge cases with array indices, or specific function behaviors",
+      prompt: "Provide instructions to guide mutation generation (Ollama will use this context):",
+      title: "Developer Instructions for AI Mutation Engine"
+    });
+
+    if (instructions !== undefined) {
+      developerInstructions = instructions;
+      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
+      if (developerInstructions.trim().length > 0) {
+        outputChannel.appendLine(`📝 Developer Instructions captured: "${developerInstructions}"`);
+        vscode.window.showInformationMessage(`Developer instructions saved. Next mutation generation will use this context.`);
+      } else {
+        vscode.window.showInformationMessage(`Developer instructions cleared.`);
+      }
+    }
+  });
+
+  // Capture focus area
+  let setFocusArea = vscode.commands.registerCommand('mutation.setFocusArea', async () => {
+    const area = await vscode.window.showQuickPick([
+      { label: "Edge Cases", description: "Focus on boundary conditions and edge cases" },
+      { label: "Performance", description: "Generate mutations testing performance implications" },
+      { label: "Logic", description: "Focus on logical operators and conditionals" },
+      { label: "Return Values", description: "Mutations involving return value modifications" },
+      { label: "All", description: "Generate all types of mutations" }
+    ], { title: "Select Focus Area" });
+
+    if (area) {
+      focusArea = area.label;
+      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
+      outputChannel.appendLine(`🎯 Focus Area set to: ${focusArea}`);
+      vscode.window.showInformationMessage(`Focus area set to "${focusArea}". This will guide mutation generation.`);
+    }
+  });
+
+  // Capture test strategy
+  let setTestStrategy = vscode.commands.registerCommand('mutation.setTestStrategy', async () => {
+    const strategy = await vscode.window.showQuickPick([
+      { label: "Branch Coverage", description: "Generate mutations targeting branch coverage" },
+      { label: "Statement Coverage", description: "Generate mutations for statement coverage" },
+      { label: "Path Coverage", description: "Generate mutations for path coverage" },
+      { label: "Comprehensive", description: "Comprehensive mutation testing strategy" }
+    ], { title: "Select Test Strategy" });
+
+    if (strategy) {
+      testStrategy = strategy.label;
+      treeDataProvider.setDeveloperContext(developerInstructions, focusArea, testStrategy);
+      outputChannel.appendLine(`📊 Test Strategy set to: ${testStrategy}`);
+      vscode.window.showInformationMessage(`Test strategy set to "${testStrategy}".`);
+    }
+  });
+
+  // Clear all developer context
+  let clearDeveloperContext = vscode.commands.registerCommand('mutation.clearDeveloperContext', async () => {
+    developerInstructions = "";
+    focusArea = "";
+    testStrategy = "";
+    treeDataProvider.setDeveloperContext("", "", "");
+    outputChannel.appendLine(`🗑️ All developer context cleared.`);
+    vscode.window.showInformationMessage(`Developer context cleared.`);
+  });
+
   // ══════════════════════════════════════════════════════════════
   // Command 1: Run Baseline Tests
   // ══════════════════════════════════════════════════════════════
@@ -515,15 +587,37 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine(`🧬 Initiating AST Scan for Files: ${targetFiles.join(', ')}`);
     outputChannel.appendLine(`   • Operators: ${selectedOperators.join(', ')}`);
     outputChannel.appendLine(`   • AI Prioritizer: ${aiProvider}`);
+    if (developerInstructions) {
+      outputChannel.appendLine(`   • Developer Instructions: "${developerInstructions}"`);
+    }
+    if (focusArea) {
+      outputChannel.appendLine(`   • Focus Area: ${focusArea}`);
+    }
+    if (testStrategy) {
+      outputChannel.appendLine(`   • Test Strategy: ${testStrategy}`);
+    }
     outputChannel.appendLine("=================================================");
 
     try {
-      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, {
+      const generatePayload: any = {
         workspaceDir: wsDir,
         targetFiles: targetFiles,
         operators: selectedOperators,
         aiEngineProvider: aiProvider
-      });
+      };
+
+      // Include developer context if provided
+      if (developerInstructions.trim()) {
+        generatePayload.developerInstructions = developerInstructions;
+      }
+      if (focusArea.trim()) {
+        generatePayload.focusArea = focusArea;
+      }
+      if (testStrategy.trim()) {
+        generatePayload.testStrategy = testStrategy;
+      }
+
+      const resp = await makePostRequest(`${backendUrl}/api/v1/projects/default/mutations/generate`, generatePayload);
 
       // Defensive handling to ensure resp.mutants is populated and avoids "properties of undefined (reading 'map')" crashes
       const mutantsFound = resp && resp.mutants ? resp.mutants : [];
@@ -1465,6 +1559,10 @@ export function activate(context: vscode.ExtensionContext) {
     executeRuns,
     showDiff,
     analyzeCurrentEditor,
+    setDeveloperInstructions,
+    setFocusArea,
+    setTestStrategy,
+    clearDeveloperContext,
     proposeKillTest,
     suggestFixForMutant,
     suggestFixesCurrentEditor,
