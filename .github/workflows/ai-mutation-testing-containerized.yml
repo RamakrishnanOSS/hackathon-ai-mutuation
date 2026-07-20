@@ -56,10 +56,11 @@ on:
 
 env:
   PYTHON_VERSION: "3.11"
-  IMAGE_TAG: mutation-testing:latest
+  IMAGE_TAG: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   # ─────────────────────────────────────────────────────────────
@@ -96,7 +97,10 @@ jobs:
     needs: build-image
     continue-on-error: true
     container:
-      image: ${{ env.IMAGE_TAG }}
+      image: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: -v /tmp:/tmp
     steps:
       - name: Checkout repository
@@ -124,7 +128,10 @@ jobs:
     needs: build-image
     continue-on-error: true
     container:
-      image: ${{ env.IMAGE_TAG }}
+      image: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: -v /tmp:/tmp
     outputs:
       total: ${{ steps.metrics.outputs.total }}
@@ -161,7 +168,10 @@ jobs:
     continue-on-error: true
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_c_tests) }}
     container:
-      image: ${{ env.IMAGE_TAG }}
+      image: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: -v /tmp:/tmp
     outputs:
       files: ${{ steps.metrics.outputs.files }}
@@ -200,7 +210,10 @@ jobs:
     continue-on-error: true
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_cpp_tests) }}
     container:
-      image: ${{ env.IMAGE_TAG }}
+      image: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: -v /tmp:/tmp
     outputs:
       files: ${{ steps.metrics.outputs.files }}
@@ -246,7 +259,10 @@ jobs:
         ) && (github.event_name != 'workflow_dispatch' || inputs.run_c_tests)
       }}
     container:
-      image: ${{ env.IMAGE_TAG }}
+      image: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: -v /tmp:/tmp
     outputs:
       killed: ${{ steps.metrics.outputs.killed }}
@@ -290,7 +306,10 @@ jobs:
         ) && (github.event_name != 'workflow_dispatch' || inputs.run_cpp_tests)
       }}
     container:
-      image: ${{ env.IMAGE_TAG }}
+      image: ghcr.io/ramakrishnanoss/hackathon-ai-mutuation/mutation-testing:cache
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: -v /tmp:/tmp
     outputs:
       killed: ${{ steps.metrics.outputs.killed }}
